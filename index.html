@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>حمّل الفيديو</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.card {
+  background: white;
+  border-radius: 20px;
+  padding: 40px 30px;
+  width: 100%;
+  max-width: 500px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  text-align: center;
+}
+h1 { font-size: 28px; color: #333; margin-bottom: 8px; }
+p { color: #888; margin-bottom: 30px; font-size: 14px; }
+.platforms { display: flex; justify-content: center; gap: 10px; margin-bottom: 25px; flex-wrap: wrap; }
+.badge {
+  background: #f0f0f0;
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: #555;
+}
+input {
+  width: 100%;
+  padding: 15px 20px;
+  border: 2px solid #eee;
+  border-radius: 12px;
+  font-size: 15px;
+  outline: none;
+  transition: border 0.3s;
+  margin-bottom: 15px;
+  direction: ltr;
+}
+input:focus { border-color: #667eea; }
+button {
+  width: 100%;
+  padding: 15px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: opacity 0.3s;
+}
+button:hover { opacity: 0.9; }
+#result { margin-top: 20px; }
+.download-btn {
+  display: inline-block;
+  margin-top: 15px;
+  padding: 12px 30px;
+  background: #28a745;
+  color: white;
+  border-radius: 10px;
+  text-decoration: none;
+  font-size: 15px;
+}
+.error { color: #e74c3c; margin-top: 15px; }
+.loading { color: #667eea; margin-top: 15px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🎬 حمّل الفيديو</h1>
+  <p>بدون علامة مائية</p>
+  <div class="platforms">
+    <span class="badge">TikTok</span>
+    <span class="badge">Instagram</span>
+    <span class="badge">Twitter</span>
+    <span class="badge">YouTube</span>
+  </div>
+  <input type="text" id="urlInput" placeholder="الصق رابط الفيديو هنا..." />
+  <button onclick="download()">⬇️ تحميل</button>
+  <div id="result"></div>
+</div>
+
+<script>
+function download() {
+  const url = document.getElementById('urlInput').value.trim();
+  const result = document.getElementById('result');
+  
+  if (!url) {
+    result.innerHTML = '<p class="error">الصق رابط أولاً</p>';
+    return;
+  }
+
+  result.innerHTML = '<p class="loading">⏳ جاري التحميل...</p>';
+
+  fetch('https://your-backend.onrender.com/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: url })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.download_url) {
+      result.innerHTML = `<a class="download-btn" href="${data.download_url}" target="_blank">✅ اضغط للتحميل</a>`;
+    } else {
+      result.innerHTML = '<p class="error">حدث خطأ، تأكد من الرابط</p>';
+    }
+  })
+  .catch(() => {
+    result.innerHTML = '<p class="error">تعذر الاتصال بالسيرفر</p>';
+  });
+}
+</script>
+</body>
+</html>
