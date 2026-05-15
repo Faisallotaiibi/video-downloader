@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import yt_dlp
 import uuid
 import os
+import threading
 
 app = FastAPI()
 
@@ -20,19 +22,17 @@ class VideoRequest(BaseModel):
 @app.post("/download")
 def download(req: VideoRequest):
     try:
-        filename = f"/tmp/{uuid.uuid4()}.mp4"
         ydl_opts = {
-            'outtmpl': filename,
             'format': 'best[ext=mp4]/best',
+            'noplaylist': True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([req.url])
-        
-        if os.path.exists(filename):
-            return {"download_url": f"/file/{os.path.basename(filename)}"}
-        return {"error": "فشل التحميل"}
+            info = ydl.extract_info(req.url, download=False)
+            video_url = info.get('url') or info['formats'][-1]['url']
+            title = info.get('title', 'video')
+            return {"download_url": video_url, "title": title}
     except Exception as e:
-        return {"error": str(e)}
+        return JSONResponse(status_code=400, content={"error": str(e)})
 
 @app.get("/")
 def root():
