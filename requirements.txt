@@ -1,4 +1,2 @@
-fastapi
-uvicorn
+pyTelegramBotAPI
 yt-dlp
-pydantic
