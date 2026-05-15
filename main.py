@@ -1,6 +1,8 @@
 import os
 import telebot
 import yt_dlp
+import threading
+import http.server
 
 BOT_TOKEN = "8899902646:AAGSVzBQ-c6HFqpI_AdO0u_0s7bcCGAtcEo"
 
@@ -18,20 +20,15 @@ def download(message):
         ydl_opts = {
             'format': 'best[ext=mp4]/best',
             'noplaylist': True,
-            'outtmpl': '/tmp/%(id)s.%(ext)s',
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-        
-        with open(filename, 'rb') as f:
-            bot.send_video(message.chat.id, f)
-        os.remove(filename)
+            info = ydl.extract_info(url, download=False)
+            video_url = info.get('url') or info['formats'][-1]['url']
+            title = info.get('title', 'فيديو')
+
+        bot.reply_to(message, f"✅ *{title}*\n\n[اضغط هنا للتحميل المباشر]({video_url})", parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, f"❌ فشل التحميل: {str(e)}")
-
-import threading
-import http.server
 
 def run_server():
     server = http.server.HTTPServer(('0.0.0.0', 10000), http.server.BaseHTTPRequestHandler)
@@ -39,4 +36,3 @@ def run_server():
 
 threading.Thread(target=run_server, daemon=True).start()
 bot.infinity_polling()
-
