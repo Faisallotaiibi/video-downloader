@@ -30,4 +30,13 @@ def download(message):
     except Exception as e:
         bot.reply_to(message, f"❌ فشل التحميل: {str(e)}")
 
-bot.polling()
+import threading
+import http.server
+
+def run_server():
+    server = http.server.HTTPServer(('0.0.0.0', 10000), http.server.BaseHTTPRequestHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_server, daemon=True).start()
+bot.infinity_polling()
+
