@@ -3,10 +3,20 @@ import telebot
 import yt_dlp
 import threading
 import http.server
+import requests
+import time
 
 BOT_TOKEN = "8899902646:AAGSVzBQ-c6HFqpI_AdO0u_0s7bcCGAtcEo"
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+def keep_alive():
+    while True:
+        try:
+            requests.get("https://video-downloader-0ea4.onrender.com")
+        except:
+            pass
+        time.sleep(840)
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -36,5 +46,6 @@ def run_server():
     server = http.server.HTTPServer(('0.0.0.0', 10000), http.server.BaseHTTPRequestHandler)
     server.serve_forever()
 
+threading.Thread(target=keep_alive, daemon=True).start()
 threading.Thread(target=run_server, daemon=True).start()
 bot.infinity_polling()
