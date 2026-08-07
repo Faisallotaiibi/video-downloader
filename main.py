@@ -1,5 +1,7 @@
 import logging
 import os
+import random
+import re
 import sqlite3
 import threading
 import time
@@ -42,6 +44,50 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 # picks an already-combined format. Ask for bestvideo+bestaudio explicitly
 # so separate-stream sites (Reddit, etc.) actually get merged.
 FORMAT_SELECTOR = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
+
+WELCOME_MESSAGE = (
+    "أهلين 👋 أنا مساعدك الخاص لتحميل أي فيديو تحبه\n\n"
+    "بس الصق الرابط وأنا أسوي الباقي – بدون علامة مائية طبعًا 😉\n\n"
+    "منصاتي المفضلة: 🎵📷🐦👻🔴"
+)
+
+NOT_A_URL_MESSAGE = "هذا مو رابط 🤔\n\nأرسل لي رابط الفيديو مباشرة وأنا أتكفل الباقي 🎬"
+
+DOWNLOADING_MESSAGES = [
+    "🎬 جاري تجهيز فيديوك...",
+    "✨ ثانية وتلقاه...",
+    "🚀 شوي وأجهزه لك...",
+    "⏳ خلني أشتغل عليه...",
+]
+
+SUCCESS_CAPTION = "✅ تفضل! جرّب @The966bot مع أصحابك 😉"
+
+SNAPCHAT_SHORT_LINK_RE = re.compile(r"snapchat\.com/t/", re.IGNORECASE)
+
+SNAPCHAT_SHORT_LINK_MESSAGE = (
+    "👻 رابط سناب شات هذا مختصر وما أقدر أفتحه\n\n"
+    "افتحه بتطبيق سناب شات، انسخ الرابط الجديد اللي يطلع، وارسله لي 🙌"
+)
+
+MAX_FILESIZE_MESSAGE = "📀 واااو! الفيديو هذا ضخم زيادة لتيليجرام 😅\nجرّب واحد أقصر"
+
+NO_VIDEO_FOUND_MESSAGE = "🤔 ما لقيت فيديو بهذا الرابط\nمتأكد انه فيديو مو منشور نص/صورة؟"
+
+YOUTUBE_BLOCKED_MESSAGE = "😅 يوتيوب ما موافق علي الوقت\n🎵 جرّب تيك توك أو 👻 سناب شات بدله"
+
+GENERIC_ERROR_MESSAGE = "😅 صار شي غريب من جهتي! جرّب مرة ثانية ولا جرّب رابط ثاني 🙌"
+
+
+def friendly_error_message(url, error_text):
+    text = error_text.lower()
+    if "sign in to confirm" in text or ("youtube" in url.lower() and "player response" in text):
+        return YOUTUBE_BLOCKED_MESSAGE
+    if "max_filesize" in text or "50mb" in text or "أكبر من 50" in error_text:
+        return MAX_FILESIZE_MESSAGE
+    if "requested format is not available" in text or "unsupported url" in text:
+        return NO_VIDEO_FOUND_MESSAGE
+    return GENERIC_ERROR_MESSAGE
+
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__, static_folder=".")
@@ -114,7 +160,7 @@ def keep_alive():
 @bot.message_handler(commands=['start'])
 def start(message):
     logger.info("Received /start from chat_id=%s", message.chat.id)
-    bot.reply_to(message, "أهلاً! أرسل لي رابط الفيديو وأنا أحمله لك بدون علامة مائية 🎬")
+    bot.reply_to(message, WELCOME_MESSAGE)
 
 
 @bot.message_handler(content_types=['text'])
@@ -126,10 +172,14 @@ def download(message):
     )
 
     if not url.lower().startswith(("http://", "https://")):
-        bot.reply_to(message, "من فضلك أرسل رابط فيديو صالح.")
+        bot.reply_to(message, NOT_A_URL_MESSAGE)
         return
 
-    bot.reply_to(message, "⏳ جاري التحميل...")
+    if SNAPCHAT_SHORT_LINK_RE.search(url):
+        bot.reply_to(message, SNAPCHAT_SHORT_LINK_MESSAGE)
+        return
+
+    bot.reply_to(message, random.choice(DOWNLOADING_MESSAGES))
     filename = None
     try:
         ydl_opts = {
@@ -146,14 +196,14 @@ def download(message):
             filename = ydl.prepare_filename(info)
 
         if not os.path.exists(filename):
-            raise FileNotFoundError("تعذر تنزيل الملف (قد يكون حجمه أكبر من 50MB)")
+            raise FileNotFoundError("الملف أكبر من 50MB")
 
         with open(filename, 'rb') as f:
-            bot.send_video(message.chat.id, f)
+            bot.send_video(message.chat.id, f, caption=SUCCESS_CAPTION)
         log_usage("telegram", requester, url, "success")
     except Exception as e:
         logger.exception("Download failed for url=%s", url)
-        bot.reply_to(message, f"❌ فشل التحميل: {e}")
+        bot.reply_to(message, friendly_error_message(url, str(e)))
         log_usage("telegram", requester, url, "failed", str(e))
     finally:
         if filename and os.path.exists(filename):
