@@ -100,8 +100,7 @@ function download() {
 
   result.innerHTML = '<p class="loading">⏳ جاري التحميل...</p>';
 
-  fetch('fetch('https://video-downloader-0ea4.onrender.com/download', {
-
+  fetch('/download', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url: url })
