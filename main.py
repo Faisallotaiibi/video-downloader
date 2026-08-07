@@ -244,6 +244,8 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid #eee; white-space: nowrap; }
 th { color: #888; font-weight: 600; }
 td.url { max-width: 300px; overflow: hidden; text-overflow: ellipsis; direction: ltr; text-align: left; }
+td.url a { color: #667eea; text-decoration: none; }
+td.url a:hover { text-decoration: underline; }
 .badge { padding: 3px 10px; border-radius: 20px; font-size: 12px; }
 .badge.success { background: #d4edda; color: #28a745; }
 .badge.failed { background: #f8d7da; color: #e74c3c; }
@@ -278,7 +280,7 @@ td.url { max-width: 300px; overflow: hidden; text-overflow: ellipsis; direction:
         <td>{{ row.source }}</td>
         <td>{{ row.requester }}</td>
         <td>{{ row.platform }}</td>
-        <td class="url">{{ row.url }}</td>
+        <td class="url"><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer" title="{{ row.url }}">{{ row.url }}</a></td>
         <td><span class="badge {{ row.status }}">{{ 'نجح' if row.status == 'success' else 'فشل' }}</span></td>
       </tr>
       {% endfor %}
