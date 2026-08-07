@@ -70,22 +70,45 @@ if not USE_TURSO:
     )
 
 
+def _disable_turso(action):
+    global USE_TURSO
+    logger.exception(
+        "Turso %s failed/timed out - switching to local storage for the rest of this run", action
+    )
+    USE_TURSO = False
+
+
 def db_execute(sql, params=()):
-    """Run an INSERT/CREATE TABLE statement against whichever backend is active."""
+    """Run an INSERT/CREATE TABLE statement against whichever backend is active.
+
+    Any Turso failure (timeout, network error, bad query, etc.) permanently
+    falls back to local storage for the rest of the process instead of
+    raising - a flaky remote database must never crash the bot.
+    """
     if USE_TURSO:
-        _run_with_timeout(_turso_client.execute, sql, params)
-    else:
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(sql, params)
-        conn.commit()
-        conn.close()
+        try:
+            _run_with_timeout(_turso_client.execute, sql, params)
+            return
+        except Exception:
+            _disable_turso("write")
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(sql, params)
+    conn.commit()
+    conn.close()
 
 
 def db_query(sql, params=()):
-    """Run a SELECT and return a list of dict rows, regardless of backend."""
+    """Run a SELECT and return a list of dict rows, regardless of backend.
+
+    Same fallback behavior as db_execute: a broken Turso connection
+    degrades to local storage instead of raising.
+    """
     if USE_TURSO:
-        result = _run_with_timeout(_turso_client.execute, sql, params)
-        return [row.asdict() for row in result.rows]
+        try:
+            result = _run_with_timeout(_turso_client.execute, sql, params)
+            return [row.asdict() for row in result.rows]
+        except Exception:
+            _disable_turso("read")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(sql, params).fetchall()
