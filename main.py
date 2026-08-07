@@ -30,6 +30,55 @@ DASHBOARD_USERNAME = os.environ.get("DASHBOARD_USERNAME", "admin")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usage.db")
 
+# Render's free tier wipes local disk on every deploy, so usage history is
+# stored in Turso (SQLite-compatible, persists independently of Render)
+# whenever it's configured; otherwise it falls back to the local file, which
+# is fine for local development but won't survive a redeploy.
+TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL")
+TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
+USE_TURSO = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
+
+if USE_TURSO:
+    try:
+        import libsql_client
+        _turso_client = libsql_client.create_client_sync(
+            url=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN
+        )
+    except Exception:
+        logger.exception(
+            "Failed to connect to Turso - falling back to local (non-persistent) storage"
+        )
+        USE_TURSO = False
+
+if not USE_TURSO:
+    logger.warning(
+        "Usage history is stored locally and will be lost on the next deploy. "
+        "Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN for persistent storage."
+    )
+
+
+def db_execute(sql, params=()):
+    """Run an INSERT/CREATE TABLE statement against whichever backend is active."""
+    if USE_TURSO:
+        _turso_client.execute(sql, params)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(sql, params)
+        conn.commit()
+        conn.close()
+
+
+def db_query(sql, params=()):
+    """Run a SELECT and return a list of dict rows, regardless of backend."""
+    if USE_TURSO:
+        result = _turso_client.execute(sql, params)
+        return [row.asdict() for row in result.rows]
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
 # YouTube's web player extraction occasionally breaks upstream ("Failed to
 # extract any player response"); falling back to the android/ios clients
 # works around most of these outages until yt-dlp ships a fix.
@@ -94,8 +143,7 @@ app = Flask(__name__, static_folder=".")
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
+    db_execute(
         """
         CREATE TABLE IF NOT EXISTS usage_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,8 +157,6 @@ def init_db():
         )
         """
     )
-    conn.commit()
-    conn.close()
 
 
 def detect_platform(url):
@@ -128,8 +174,7 @@ def detect_platform(url):
 
 def log_usage(source, requester, url, status, error=None):
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
+        db_execute(
             "INSERT INTO usage_log (timestamp, source, requester, url, platform, status, error) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -142,8 +187,6 @@ def log_usage(source, requester, url, status, error=None):
                 error,
             ),
         )
-        conn.commit()
-        conn.close()
     except Exception:
         logger.exception("Failed to log usage")
 
@@ -274,23 +317,16 @@ def require_dashboard_auth(f):
 
 
 def dashboard_data():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    total = conn.execute("SELECT COUNT(*) AS c FROM usage_log").fetchone()["c"]
-    success = conn.execute(
-        "SELECT COUNT(*) AS c FROM usage_log WHERE status = 'success'"
-    ).fetchone()["c"]
-    by_platform = conn.execute(
+    total = db_query("SELECT COUNT(*) AS c FROM usage_log")[0]["c"]
+    success = db_query("SELECT COUNT(*) AS c FROM usage_log WHERE status = 'success'")[0]["c"]
+    by_platform = db_query(
         "SELECT platform, COUNT(*) AS c FROM usage_log GROUP BY platform ORDER BY c DESC"
-    ).fetchall()
-    daily = conn.execute(
+    )
+    daily = db_query(
         "SELECT strftime('%Y-%m-%d', timestamp) AS day, COUNT(*) AS c FROM usage_log "
         "WHERE timestamp >= date('now', '-13 days') GROUP BY day ORDER BY day"
-    ).fetchall()
-    recent = conn.execute(
-        "SELECT * FROM usage_log ORDER BY id DESC LIMIT 200"
-    ).fetchall()
-    conn.close()
+    )
+    recent = db_query("SELECT * FROM usage_log ORDER BY id DESC LIMIT 200")
 
     daily_by_day = {row["day"]: row["c"] for row in daily}
     daily_series = []
@@ -304,7 +340,8 @@ def dashboard_data():
         "failed": total - success,
         "by_platform": [{"platform": r["platform"], "count": r["c"]} for r in by_platform],
         "daily": daily_series,
-        "recent": [dict(r) for r in recent],
+        "recent": recent,
+        "persistent_storage": USE_TURSO,
     }
 
 
@@ -448,7 +485,9 @@ td.url a:hover { color: #fff; }
 <div class="wrap">
   <header>
     <h1>📊 لوحة تحكم البوت</h1>
-    <span class="refresh-note" id="refreshNote">يحدّث تلقائيًا كل 30 ثانية</span>
+    <span class="refresh-note" id="refreshNote">
+      <span id="storageNote"></span> · يحدّث تلقائيًا كل 30 ثانية
+    </span>
   </header>
 
   <div id="loading">جاري التحميل...</div>
@@ -523,6 +562,12 @@ function renderStats(data) {
   document.getElementById('statTotal').textContent = data.total;
   document.getElementById('statSuccess').textContent = data.success;
   document.getElementById('statFailed').textContent = data.failed;
+  const storageNote = document.getElementById('storageNote');
+  if (storageNote) {
+    storageNote.textContent = data.persistent_storage
+      ? '🟢 تخزين دائم'
+      : '🟡 تخزين مؤقت (يُمسح مع كل نشر)';
+  }
 }
 
 function renderBarChart(daily) {
