@@ -34,11 +34,13 @@ def keep_alive():
 
 @bot.message_handler(commands=['start'])
 def start(message):
+    logger.info("Received /start from chat_id=%s", message.chat.id)
     bot.reply_to(message, "أهلاً! أرسل لي رابط الفيديو وأنا أحمله لك بدون علامة مائية 🎬")
 
 
-@bot.message_handler(func=lambda m: True)
+@bot.message_handler(content_types=['text'])
 def download(message):
+    logger.info("Received message from chat_id=%s: %r", message.chat.id, message.text)
     url = message.text.strip()
     if not url.lower().startswith(("http://", "https://")):
         bot.reply_to(message, "من فضلك أرسل رابط فيديو صالح.")
@@ -110,4 +112,5 @@ def run_server():
 if __name__ == "__main__":
     threading.Thread(target=keep_alive, daemon=True).start()
     threading.Thread(target=run_server, daemon=True).start()
-    bot.infinity_polling()
+    logger.info("Starting Telegram bot polling as @%s", bot.get_me().username)
+    bot.infinity_polling(logger_level=logging.INFO)
