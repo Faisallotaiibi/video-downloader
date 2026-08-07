@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import os
 import random
@@ -38,15 +39,27 @@ TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL")
 TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
 USE_TURSO = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
 
+# A hung Turso connection (network issue, bad credentials, etc.) must never
+# block the bot itself - it only ever gets TURSO_TIMEOUT seconds on a
+# background thread before we give up and fall back to local storage.
+TURSO_TIMEOUT = 10
+_turso_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4) if USE_TURSO else None
+
+
+def _run_with_timeout(func, *args, **kwargs):
+    return _turso_executor.submit(func, *args, **kwargs).result(timeout=TURSO_TIMEOUT)
+
+
 if USE_TURSO:
     try:
         import libsql_client
-        _turso_client = libsql_client.create_client_sync(
-            url=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN
+        _turso_client = _run_with_timeout(
+            libsql_client.create_client_sync, url=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN
         )
     except Exception:
         logger.exception(
-            "Failed to connect to Turso - falling back to local (non-persistent) storage"
+            "Failed to connect to Turso within %ss - falling back to local (non-persistent) storage",
+            TURSO_TIMEOUT,
         )
         USE_TURSO = False
 
@@ -60,7 +73,7 @@ if not USE_TURSO:
 def db_execute(sql, params=()):
     """Run an INSERT/CREATE TABLE statement against whichever backend is active."""
     if USE_TURSO:
-        _turso_client.execute(sql, params)
+        _run_with_timeout(_turso_client.execute, sql, params)
     else:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(sql, params)
@@ -71,7 +84,7 @@ def db_execute(sql, params=()):
 def db_query(sql, params=()):
     """Run a SELECT and return a list of dict rows, regardless of backend."""
     if USE_TURSO:
-        result = _turso_client.execute(sql, params)
+        result = _run_with_timeout(_turso_client.execute, sql, params)
         return [row.asdict() for row in result.rows]
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
