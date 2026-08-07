@@ -38,6 +38,11 @@ YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'ios', 'web']
 # binary bundled by imageio-ffmpeg instead.
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 
+# 'best' alone never triggers muxing, even with ffmpeg available - it only
+# picks an already-combined format. Ask for bestvideo+bestaudio explicitly
+# so separate-stream sites (Reddit, etc.) actually get merged.
+FORMAT_SELECTOR = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
+
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__, static_folder=".")
 
@@ -128,7 +133,8 @@ def download(message):
     filename = None
     try:
         ydl_opts = {
-            'format': 'best[ext=mp4]/best',
+            'format': FORMAT_SELECTOR,
+            'merge_output_format': 'mp4',
             'noplaylist': True,
             'outtmpl': '/tmp/%(id)s.%(ext)s',
             'max_filesize': MAX_TELEGRAM_FILE_SIZE,
