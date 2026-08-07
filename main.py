@@ -53,8 +53,13 @@ def _run_with_timeout(func, *args, **kwargs):
 if USE_TURSO:
     try:
         import libsql_client
+        # The libsql:// scheme defaults to a WebSocket connection, which
+        # fails its handshake from Render's network (confirmed via logs:
+        # WSServerHandshakeError 400 on wss://...turso.io). The https://
+        # scheme talks to the exact same database over plain HTTP instead.
+        turso_http_url = TURSO_DATABASE_URL.replace("libsql://", "https://", 1)
         _turso_client = _run_with_timeout(
-            libsql_client.create_client_sync, url=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN
+            libsql_client.create_client_sync, url=turso_http_url, auth_token=TURSO_AUTH_TOKEN
         )
     except Exception:
         logger.exception(
