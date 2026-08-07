@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from urllib.parse import urlparse
 
+import imageio_ffmpeg
 import requests
 import telebot
 import yt_dlp
@@ -31,6 +32,11 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usage.db")
 # extract any player response"); falling back to the android/ios clients
 # works around most of these outages until yt-dlp ships a fix.
 YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'ios', 'web']}}
+
+# Many sites (Reddit, etc.) serve video and audio as separate streams that
+# need muxing; the OS ffmpeg isn't installed on Render, so use the static
+# binary bundled by imageio-ffmpeg instead.
+FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__, static_folder=".")
@@ -127,6 +133,7 @@ def download(message):
             'outtmpl': '/tmp/%(id)s.%(ext)s',
             'max_filesize': MAX_TELEGRAM_FILE_SIZE,
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
+            'ffmpeg_location': FFMPEG_PATH,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -166,6 +173,7 @@ def api_download():
             'format': 'best[ext=mp4]/best',
             'noplaylist': True,
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
+            'ffmpeg_location': FFMPEG_PATH,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
