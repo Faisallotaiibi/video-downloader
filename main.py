@@ -27,6 +27,11 @@ DASHBOARD_USERNAME = os.environ.get("DASHBOARD_USERNAME", "admin")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usage.db")
 
+# YouTube's web player extraction occasionally breaks upstream ("Failed to
+# extract any player response"); falling back to the android/ios clients
+# works around most of these outages until yt-dlp ships a fix.
+YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'ios', 'web']}}
+
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__, static_folder=".")
 
@@ -121,6 +126,7 @@ def download(message):
             'noplaylist': True,
             'outtmpl': '/tmp/%(id)s.%(ext)s',
             'max_filesize': MAX_TELEGRAM_FILE_SIZE,
+            'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -159,6 +165,7 @@ def api_download():
         ydl_opts = {
             'format': 'best[ext=mp4]/best',
             'noplaylist': True,
+            'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
