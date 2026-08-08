@@ -440,6 +440,10 @@ h1 { font-size: 20px; font-weight: 600; }
 .stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 .stat-card.good .num { color: var(--status-good); }
 .stat-card.critical .num { color: var(--status-critical); }
+.trend { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-top: 8px; font-weight: 600; }
+.trend.up { color: var(--status-good); }
+.trend.down { color: var(--status-critical); }
+.trend.flat { color: var(--text-muted); }
 .card h2 { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 16px; }
 #loading { color: var(--text-muted); font-size: 13px; padding: 20px 0; text-align: center; }
 #content { transition: opacity 0.2s; }
@@ -534,7 +538,7 @@ td.url a:hover { color: #fff; }
   <div id="loading">جاري التحميل...</div>
   <div id="content" style="display:none">
     <div class="stats">
-      <div class="card stat-card"><div class="num" id="statTotal">0</div><div class="label">إجمالي الاستخدامات</div></div>
+      <div class="card stat-card"><div class="num" id="statTotal">0</div><div class="label">إجمالي الاستخدامات</div><div class="trend" id="statTrend"></div></div>
       <div class="card stat-card good"><div class="num" id="statSuccess">0</div><div class="label">ناجحة</div></div>
       <div class="card stat-card critical"><div class="num" id="statFailed">0</div><div class="label">فاشلة</div></div>
     </div>
@@ -608,6 +612,23 @@ function renderStats(data) {
     storageNote.textContent = data.persistent_storage
       ? '🟢 تخزين دائم'
       : '🟡 تخزين مؤقت (يُمسح مع كل نشر)';
+  }
+
+  const trend = document.getElementById('statTrend');
+  if (trend && data.daily && data.daily.length >= 2) {
+    const today = data.daily[data.daily.length - 1].count;
+    const yesterday = data.daily[data.daily.length - 2].count;
+    const diff = today - yesterday;
+    if (diff > 0) {
+      trend.className = 'trend up';
+      trend.textContent = `↑ +${diff} اليوم`;
+    } else if (diff < 0) {
+      trend.className = 'trend down';
+      trend.textContent = `↓ ${diff} اليوم`;
+    } else {
+      trend.className = 'trend flat';
+      trend.textContent = '— بدون تغيير اليوم';
+    }
   }
 }
 
