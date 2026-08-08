@@ -447,6 +447,24 @@ h1 { font-size: 20px; font-weight: 600; }
 .card h2 { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 16px; }
 #loading { color: var(--text-muted); font-size: 13px; padding: 20px 0; text-align: center; }
 #content { transition: opacity 0.2s; }
+
+@media (prefers-reduced-motion: no-preference) {
+  #content.reveal .card {
+    animation: cardIn 0.45s cubic-bezier(.2,.8,.2,1) both;
+    animation-delay: calc(var(--i, 0) * 0.06s);
+  }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .bar { transition: height 0.5s cubic-bezier(.2,.8,.2,1), filter 0.15s; }
+  .trend.pulse { animation: trendPop 0.4s ease; }
+  @keyframes trendPop {
+    0% { transform: scale(1); }
+    35% { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+}
 #content.stale { opacity: 0.55; }
 
 .chart-scroll { overflow-x: auto; }
@@ -596,6 +614,7 @@ let sortKey = 'timestamp';
 let sortDir = -1;
 let statusFilter = 'all';
 let sourceFilter = 'all';
+let lastTrendText = null;
 
 function escapeHtml(s) {
   const d = document.createElement('div');
@@ -619,15 +638,23 @@ function renderStats(data) {
     const today = data.daily[data.daily.length - 1].count;
     const yesterday = data.daily[data.daily.length - 2].count;
     const diff = today - yesterday;
+    let cls, text;
     if (diff > 0) {
-      trend.className = 'trend up';
-      trend.textContent = `↑ +${diff} اليوم`;
+      cls = 'trend up';
+      text = `↑ +${diff} اليوم`;
     } else if (diff < 0) {
-      trend.className = 'trend down';
-      trend.textContent = `↓ ${diff} اليوم`;
+      cls = 'trend down';
+      text = `↓ ${diff} اليوم`;
     } else {
-      trend.className = 'trend flat';
-      trend.textContent = '— بدون تغيير اليوم';
+      cls = 'trend flat';
+      text = '— بدون تغيير اليوم';
+    }
+    trend.textContent = text;
+    if (text !== lastTrendText) {
+      trend.className = cls;
+      void trend.offsetWidth; // restart the pulse animation on change
+      trend.className = cls + ' pulse';
+      lastTrendText = text;
     }
   }
 }
@@ -639,6 +666,8 @@ function renderBarChart(daily) {
   chart.innerHTML = '';
   labels.innerHTML = '';
   const max = Math.max(1, ...daily.map(d => d.count));
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const grownBars = [];
 
   daily.forEach(d => {
     const col = document.createElement('div');
@@ -646,7 +675,8 @@ function renderBarChart(daily) {
     const bar = document.createElement('div');
     bar.className = 'bar';
     const pct = d.count / max;
-    bar.style.height = Math.max(3, pct * 100) + '%';
+    const targetHeight = Math.max(3, pct * 100) + '%';
+    bar.style.height = reduceMotion ? targetHeight : '0%';
     const lightness = 35 + pct * 55;
     bar.style.background = `hsl(0, 0%, ${lightness}%)`;
     bar.tabIndex = 0;
@@ -657,12 +687,19 @@ function renderBarChart(daily) {
     bar.addEventListener('blur', hideTooltip);
     col.appendChild(bar);
     chart.appendChild(col);
+    if (!reduceMotion) grownBars.push({ el: bar, targetHeight });
 
     const lbl = document.createElement('span');
     const shortDay = d.day.slice(5).replace('-', '/');
     lbl.textContent = shortDay;
     labels.appendChild(lbl);
   });
+
+  if (grownBars.length) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      grownBars.forEach(({ el, targetHeight }) => { el.style.height = targetHeight; });
+    }));
+  }
 
   function showTooltip(e, d) {
     tooltip.innerHTML = `<span class="v">${d.count}</span> <span class="d">— ${d.day}</span>`;
@@ -750,6 +787,7 @@ function renderTable(rows) {
 async function loadData() {
   const content = document.getElementById('content');
   const hasData = allRows.length > 0;
+  const isFirstLoad = !hasData;
   if (hasData) content.classList.add('stale');
   try {
     const res = await fetch('/api/dashboard-data');
@@ -762,6 +800,10 @@ async function loadData() {
     applyFiltersAndSort();
     document.getElementById('loading').style.display = 'none';
     content.style.display = 'block';
+    if (isFirstLoad) {
+      content.querySelectorAll('.card').forEach((card, i) => card.style.setProperty('--i', i));
+      content.classList.add('reveal');
+    }
   } catch (e) {
     document.getElementById('refreshNote').textContent = 'تعذر تحديث البيانات';
   } finally {
