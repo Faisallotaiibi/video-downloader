@@ -132,8 +132,12 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 
 # 'best' alone never triggers muxing, even with ffmpeg available - it only
 # picks an already-combined format. Ask for bestvideo+bestaudio explicitly
-# so separate-stream sites (Reddit, etc.) actually get merged.
-FORMAT_SELECTOR = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best'
+# so separate-stream sites (Reddit, etc.) actually get merged. No ext filter
+# here on purpose: restricting to mp4/m4a can silently cap quality below
+# what's actually available (e.g. a higher-res webm/vp9 stream) since
+# merge_output_format already remuxes the result to mp4 regardless of the
+# source container.
+FORMAT_SELECTOR = 'bestvideo+bestaudio/best'
 
 WELCOME_MESSAGE = (
     "أهلين 👋 أنا مساعدك الخاص لتحميل أي فيديو تحبه\n\n"
@@ -282,8 +286,27 @@ def download(message):
         if not os.path.exists(filename):
             raise FileNotFoundError("الملف أكبر من 50MB")
 
+        duration = info.get('duration')
+        width = info.get('width')
+        height = info.get('height')
+        logger.info(
+            "Downloaded %s: duration=%s width=%s height=%s vcodec=%s acodec=%s",
+            url, duration, width, height, info.get('vcodec'), info.get('acodec'),
+        )
+
         with open(filename, 'rb') as f:
-            bot.send_video(message.chat.id, f, caption=SUCCESS_CAPTION)
+            # Passing duration/width/height explicitly avoids Telegram clients
+            # showing a broken 0:00 / static-thumbnail player when they can't
+            # cleanly probe the remuxed file's own metadata.
+            bot.send_video(
+                message.chat.id,
+                f,
+                caption=SUCCESS_CAPTION,
+                duration=int(duration) if duration else None,
+                width=width,
+                height=height,
+                supports_streaming=True,
+            )
         log_usage("telegram", requester, url, "success")
     except Exception as e:
         logger.exception("Download failed for url=%s", url)
