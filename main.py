@@ -4,6 +4,7 @@ import os
 import random
 import re
 import sqlite3
+import subprocess
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -129,6 +130,38 @@ YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'ios', 'web']
 # need muxing; the OS ffmpeg isn't installed on Render, so use the static
 # binary bundled by imageio-ffmpeg instead.
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+
+_DURATION_RE = re.compile(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
+_DIMENSIONS_RE = re.compile(r'Video:.*?(\d{2,5})x(\d{2,5})')
+
+
+def probe_video_metadata(filepath):
+    """Read duration/width/height straight from the file via ffmpeg.
+
+    Some sites (e.g. Instagram) don't always give yt-dlp a duration in the
+    extracted info, which makes Telegram's client show a broken 0:00/frozen
+    player. ffmpeg -i prints this straight from the file's own container
+    metadata regardless of what the source site reported.
+    """
+    try:
+        result = subprocess.run(
+            [FFMPEG_PATH, '-i', filepath],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15,
+        )
+        output = result.stderr
+        duration = None
+        m = _DURATION_RE.search(output)
+        if m:
+            hours, minutes, seconds = m.groups()
+            duration = int(float(hours) * 3600 + float(minutes) * 60 + float(seconds))
+        width = height = None
+        m2 = _DIMENSIONS_RE.search(output)
+        if m2:
+            width, height = int(m2.group(1)), int(m2.group(2))
+        return duration, width, height
+    except Exception:
+        logger.exception("Failed to probe video metadata for %s", filepath)
+        return None, None, None
 
 # 'best' alone never triggers muxing, even with ffmpeg available - it only
 # picks an already-combined format. Ask for bestvideo+bestaudio explicitly
@@ -289,6 +322,11 @@ def download(message):
         duration = info.get('duration')
         width = info.get('width')
         height = info.get('height')
+        if not duration or not width or not height:
+            probed_duration, probed_width, probed_height = probe_video_metadata(filename)
+            duration = duration or probed_duration
+            width = width or probed_width
+            height = height or probed_height
         logger.info(
             "Downloaded %s: duration=%s width=%s height=%s vcodec=%s acodec=%s",
             url, duration, width, height, info.get('vcodec'), info.get('acodec'),
