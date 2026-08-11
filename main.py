@@ -177,13 +177,22 @@ def reencode_for_compatibility(filepath):
     keeps going, and saving the file fails outright. A real re-encode
     produces a clean stream that plays and saves normally everywhere, at
     the cost of some CPU time.
+
+    Render's free tier has a hard ~512MB memory ceiling, and confirmed via
+    a real crash+restart in the logs, the default multi-threaded libx264
+    encode (measured ~250MB peak RSS on a modest 1088x1088 clip) can get
+    the whole process OOM-killed mid-request - not just this download, the
+    entire bot goes down and Render silently restarts it. threads=1 +
+    preset=ultrafast + capping resolution at 1280px measured ~112MB peak
+    RSS on the same clip, at the cost of a somewhat larger output file.
     """
     fixed_path = f'{filepath}.fixed.mp4'
     try:
         result = subprocess.run(
             [
                 FFMPEG_PATH, '-y', '-i', filepath,
-                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+                '-vf', "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease",
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-threads', '1',
                 '-pix_fmt', 'yuv420p',
                 '-c:a', 'aac', '-b:a', '128k',
                 '-movflags', '+faststart',
