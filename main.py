@@ -133,10 +133,11 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 
 _DURATION_RE = re.compile(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
 _DIMENSIONS_RE = re.compile(r'Video:.*?(\d{2,5})x(\d{2,5})')
+_VCODEC_RE = re.compile(r'Video:\s*(\w+)')
 
 
 def probe_video_metadata(filepath):
-    """Read duration/width/height straight from the file via ffmpeg.
+    """Read duration/width/height/codec straight from the file via ffmpeg.
 
     Some sites (e.g. Instagram) don't always give yt-dlp a duration in the
     extracted info, which makes Telegram's client show a broken 0:00/frozen
@@ -158,34 +159,39 @@ def probe_video_metadata(filepath):
         m2 = _DIMENSIONS_RE.search(output)
         if m2:
             width, height = int(m2.group(1)), int(m2.group(2))
-        return duration, width, height
+        vcodec = None
+        m3 = _VCODEC_RE.search(output)
+        if m3:
+            vcodec = m3.group(1).lower()
+        return duration, width, height, vcodec
     except Exception:
         logger.exception("Failed to probe video metadata for %s", filepath)
-        return None, None, None
+        return None, None, None, None
 
 
-def reencode_for_compatibility(filepath):
-    """Re-encode to a clean, standard H.264/AAC mp4.
+def reencode_for_compatibility(filepath, vcodec=None):
+    """Re-encode to H.264/AAC mp4 - but ONLY when the file isn't h264 already.
 
-    yt-dlp's merger uses `-c copy` (no re-encode) to stay fast, which just
-    repackages whatever bitstream the source site served. Some sites
-    (Instagram's DASH-fragmented clips especially) hand over a technically
-    valid but slightly irregular stream - frame references or timestamps
-    that a lenient decoder (a seek/preview or desktop player) tolerates,
-    but that a strict one (Telegram's iOS player, or iOS's own camera roll
-    import) chokes on: playback freezes on the first frame while audio
-    keeps going, and saving the file fails outright. A real re-encode
-    produces a clean stream that plays and saves normally everywhere, at
-    the cost of some CPU time.
+    The frozen-frame / can't-save-to-camera-roll symptom is a codec problem:
+    Telegram's iOS player and iOS's camera roll only handle H.264/HEVC, so a
+    VP9 video in an mp4 container plays its (AAC) audio while the picture
+    stays stuck on the poster frame. The format selector now prefers avc1
+    streams, so the common case needs no processing at all - which matters
+    because Render's free tier CPU is far too weak to re-encode video at
+    interactive speed, and the encode's memory pressure was OOM-killing the
+    whole process (confirmed via crash+restart in the logs).
 
-    Render's free tier has a hard ~512MB memory ceiling, and confirmed via
-    a real crash+restart in the logs, the default multi-threaded libx264
-    encode (measured ~250MB peak RSS on a modest 1088x1088 clip) can get
-    the whole process OOM-killed mid-request - not just this download, the
-    entire bot goes down and Render silently restarts it. threads=1 +
-    preset=ultrafast + capping resolution at 1280px measured ~112MB peak
-    RSS on the same clip, at the cost of a somewhat larger output file.
+    This function is the rare-case fallback for sites that genuinely offer
+    no h264 stream: skip immediately if the probe says h264, otherwise do a
+    memory-light single-threaded encode (~112MB peak RSS measured, vs
+    ~250MB for ffmpeg's defaults).
     """
+    if vcodec is None:
+        _, _, _, vcodec = probe_video_metadata(filepath)
+    if vcodec in ('h264', 'hevc'):
+        return filepath
+
+    logger.info("Non-h264 codec %r in %s - re-encoding for compatibility", vcodec, filepath)
     fixed_path = f'{filepath}.fixed.mp4'
     try:
         result = subprocess.run(
@@ -213,14 +219,19 @@ def reencode_for_compatibility(filepath):
     os.remove(filepath)
     return fixed_path
 
-# 'best' alone never triggers muxing, even with ffmpeg available - it only
-# picks an already-combined format. Ask for bestvideo+bestaudio explicitly
-# so separate-stream sites (Reddit, etc.) actually get merged. No ext filter
-# here on purpose: restricting to mp4/m4a can silently cap quality below
-# what's actually available (e.g. a higher-res webm/vp9 stream) since
-# merge_output_format already remuxes the result to mp4 regardless of the
-# source container.
-FORMAT_SELECTOR = 'bestvideo+bestaudio/best'
+# Prefer the best h264 (avc1) stream: it's what Telegram's mobile players
+# and iOS's camera roll can actually decode, and nearly every platform
+# serves one at full quality - a bare 'bestvideo' would sometimes pick a
+# VP9 stream instead, which plays as frozen-picture-with-audio on iOS
+# Telegram and can't be saved to the camera roll (confirmed via logs:
+# vcodec=vp09 on the affected Instagram reels). Explicit bestvideo+bestaudio
+# fallbacks keep separate-stream sites (Reddit) merging when no h264 exists.
+FORMAT_SELECTOR = (
+    'bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/'
+    'bestvideo[vcodec^=avc1]+bestaudio/'
+    'bestvideo[ext=mp4]+bestaudio[ext=m4a]/'
+    'bestvideo+bestaudio/best'
+)
 
 WELCOME_MESSAGE = (
     "أهلين 👋 أنا مساعدك الخاص لتحميل أي فيديو تحبه\n\n"
@@ -380,18 +391,22 @@ def download(message):
         if not os.path.exists(filename):
             raise FileNotFoundError("الملف أكبر من 50MB")
 
-        filename = reencode_for_compatibility(filename)
+        duration, width, height, vcodec = probe_video_metadata(filename)
+        reencoded = reencode_for_compatibility(filename, vcodec)
+        if reencoded != filename:
+            filename = reencoded
+            # dimensions may have changed (1280px cap) - re-read from the new file
+            duration, width, height, vcodec = probe_video_metadata(filename)
 
         if os.path.getsize(filename) > MAX_TELEGRAM_FILE_SIZE:
             raise FileNotFoundError("الملف أكبر من 50MB")
 
-        duration, width, height = probe_video_metadata(filename)
         duration = duration or info.get('duration')
         width = width or info.get('width')
         height = height or info.get('height')
         logger.info(
             "Downloaded %s: duration=%s width=%s height=%s vcodec=%s acodec=%s",
-            url, duration, width, height, info.get('vcodec'), info.get('acodec'),
+            url, duration, width, height, vcodec, info.get('acodec'),
         )
 
         with open(filename, 'rb') as f:
