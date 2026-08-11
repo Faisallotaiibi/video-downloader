@@ -134,15 +134,19 @@ FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 _DURATION_RE = re.compile(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
 _DIMENSIONS_RE = re.compile(r'Video:.*?(\d{2,5})x(\d{2,5})')
 _VCODEC_RE = re.compile(r'Video:\s*(\w+)')
+_PIXFMT_RE = re.compile(r'Video:[^,]*,\s*([a-z0-9]+)')
 
 
 def probe_video_metadata(filepath):
-    """Read duration/width/height/codec straight from the file via ffmpeg.
+    """Read duration/width/height/codec/pixel-format from the file via ffmpeg.
 
     Some sites (e.g. Instagram) don't always give yt-dlp a duration in the
     extracted info, which makes Telegram's client show a broken 0:00/frozen
     player. ffmpeg -i prints this straight from the file's own container
-    metadata regardless of what the source site reported.
+    metadata regardless of what the source site reported. The pixel format
+    matters as much as the codec: phone hardware decoders only handle 8-bit
+    4:2:0 (yuv420p) - an h264 stream in yuv444p or 10-bit still shows up as
+    frozen-picture-with-audio on iOS.
     """
     try:
         result = subprocess.run(
@@ -163,44 +167,86 @@ def probe_video_metadata(filepath):
         m3 = _VCODEC_RE.search(output)
         if m3:
             vcodec = m3.group(1).lower()
-        return duration, width, height, vcodec
+        pix_fmt = None
+        m4 = _PIXFMT_RE.search(output)
+        if m4:
+            pix_fmt = m4.group(1).lower()
+        return duration, width, height, vcodec, pix_fmt
     except Exception:
         logger.exception("Failed to probe video metadata for %s", filepath)
-        return None, None, None, None
+        return None, None, None, None, None
 
 
-def reencode_for_compatibility(filepath, vcodec=None):
-    """Re-encode to H.264/AAC mp4 - but ONLY when the file isn't h264 already.
+def remux_clean(filepath):
+    """Losslessly rewrite the container: stream-copy remux, ~0.02s measured.
 
-    The frozen-frame / can't-save-to-camera-roll symptom is a codec problem:
-    Telegram's iOS player and iOS's camera roll only handle H.264/HEVC, so a
-    VP9 video in an mp4 container plays its (AAC) audio while the picture
-    stays stuck on the poster frame. The format selector now prefers avc1
-    streams, so the common case needs no processing at all - which matters
-    because Render's free tier CPU is far too weak to re-encode video at
-    interactive speed, and the encode's memory pressure was OOM-killing the
-    whole process (confirmed via crash+restart in the logs).
-
-    This function is the rare-case fallback for sites that genuinely offer
-    no h264 stream: skip immediately if the probe says h264, otherwise do a
-    memory-light single-threaded encode (~112MB peak RSS measured, vs
-    ~250MB for ffmpeg's defaults).
+    Fixes the delivery problems that don't need a re-encode: a non-zero
+    start timestamp / edit list (freezes strict players on the first frame
+    while audio runs), the moov index sitting at the end of the file
+    (breaks streaming playback - Telegram streams, it doesn't download
+    first), and stray data/subtitle tracks. Keeps only the first video and
+    audio stream, zeroes timestamps, and puts the index up front.
     """
-    if vcodec is None:
-        _, _, _, vcodec = probe_video_metadata(filepath)
-    if vcodec in ('h264', 'hevc'):
+    clean_path = f'{filepath}.clean.mp4'
+    try:
+        result = subprocess.run(
+            [
+                FFMPEG_PATH, '-y', '-i', filepath,
+                '-map', '0:v:0', '-map', '0:a:0?',
+                '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
+                '-movflags', '+faststart',
+                clean_path,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+        )
+        if result.returncode != 0 or not os.path.exists(clean_path):
+            logger.error(
+                "Remux failed for %s (exit %s): %s",
+                filepath, result.returncode, result.stderr.decode(errors='replace')[-1000:],
+            )
+            return filepath
+    except Exception:
+        logger.exception("Remux raised an exception for %s", filepath)
         return filepath
 
-    logger.info("Non-h264 codec %r in %s - re-encoding for compatibility", vcodec, filepath)
+    os.remove(filepath)
+    return clean_path
+
+
+def ensure_playable(filepath, vcodec=None, pix_fmt=None):
+    """Guarantee an iOS/Telegram-playable file, as cheaply as possible.
+
+    Phone players only hardware-decode H.264/HEVC in 8-bit 4:2:0. When the
+    stream already is that (the overwhelmingly common case now that the
+    format selector prefers avc1), a lossless 0.02s remux normalizes the
+    container quirks that still freeze strict players (non-zero start
+    timestamps, moov index at the end of the file). Only when the codec or
+    pixel format is genuinely incompatible (VP9/AV1, yuv444p, 10-bit) does
+    the expensive re-encode run - memory-light (threads=1, ~112MB peak RSS
+    measured vs ~250MB default) because Render's free tier OOM-killed the
+    whole process on ffmpeg's defaults, confirmed via crash+restart logs.
+    """
+    if vcodec is None or pix_fmt is None:
+        _, _, _, vcodec, pix_fmt = probe_video_metadata(filepath)
+    if vcodec in ('h264', 'hevc') and pix_fmt == 'yuv420p':
+        return remux_clean(filepath)
+
+    logger.info(
+        "Incompatible stream (vcodec=%r pix_fmt=%r) in %s - re-encoding",
+        vcodec, pix_fmt, filepath,
+    )
     fixed_path = f'{filepath}.fixed.mp4'
     try:
         result = subprocess.run(
             [
                 FFMPEG_PATH, '-y', '-i', filepath,
-                '-vf', "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease",
+                '-map', '0:v:0', '-map', '0:a:0?',
+                '-vf', "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-threads', '1',
                 '-pix_fmt', 'yuv420p',
                 '-c:a', 'aac', '-b:a', '128k',
+                '-avoid_negative_ts', 'make_zero',
                 '-movflags', '+faststart',
                 fixed_path,
             ],
@@ -391,12 +437,12 @@ def download(message):
         if not os.path.exists(filename):
             raise FileNotFoundError("الملف أكبر من 50MB")
 
-        duration, width, height, vcodec = probe_video_metadata(filename)
-        reencoded = reencode_for_compatibility(filename, vcodec)
-        if reencoded != filename:
-            filename = reencoded
+        duration, width, height, vcodec, pix_fmt = probe_video_metadata(filename)
+        processed = ensure_playable(filename, vcodec, pix_fmt)
+        if processed != filename:
+            filename = processed
             # dimensions may have changed (1280px cap) - re-read from the new file
-            duration, width, height, vcodec = probe_video_metadata(filename)
+            duration, width, height, vcodec, pix_fmt = probe_video_metadata(filename)
 
         if os.path.getsize(filename) > MAX_TELEGRAM_FILE_SIZE:
             raise FileNotFoundError("الملف أكبر من 50MB")
