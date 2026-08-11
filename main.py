@@ -135,6 +135,17 @@ _DURATION_RE = re.compile(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
 _DIMENSIONS_RE = re.compile(r'Video:.*?(\d{2,5})x(\d{2,5})')
 _VCODEC_RE = re.compile(r'Video:\s*(\w+)')
 _PIXFMT_RE = re.compile(r'Video:[^,]*,\s*([a-z0-9]+)')
+_ACODEC_RE = re.compile(r'Audio:\s*(\w+)')
+
+# 8-bit 4:2:0 variants that phone hardware decoders handle natively.
+# yuvj420p is the full-range flavor of yuv420p - identical compatibility,
+# and treating it as incompatible sent perfectly fine h264 files through
+# the minutes-long re-encode path for nothing.
+COMPATIBLE_PIX_FMTS = ('yuv420p', 'yuvj420p')
+
+
+def is_stream_compatible(vcodec, pix_fmt):
+    return vcodec in ('h264', 'hevc') and pix_fmt in COMPATIBLE_PIX_FMTS
 
 
 def probe_video_metadata(filepath):
@@ -171,10 +182,14 @@ def probe_video_metadata(filepath):
         m4 = _PIXFMT_RE.search(output)
         if m4:
             pix_fmt = m4.group(1).lower()
-        return duration, width, height, vcodec, pix_fmt
+        acodec = None
+        m5 = _ACODEC_RE.search(output)
+        if m5:
+            acodec = m5.group(1).lower()
+        return duration, width, height, vcodec, pix_fmt, acodec
     except Exception:
         logger.exception("Failed to probe video metadata for %s", filepath)
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
 
 def remux_clean(filepath):
@@ -214,7 +229,7 @@ def remux_clean(filepath):
     return clean_path
 
 
-def ensure_playable(filepath, vcodec=None, pix_fmt=None):
+def ensure_playable(filepath, vcodec=None, pix_fmt=None, acodec=None):
     """Guarantee an iOS/Telegram-playable file, as cheaply as possible.
 
     Phone players only hardware-decode H.264/HEVC in 8-bit 4:2:0. When the
@@ -226,31 +241,36 @@ def ensure_playable(filepath, vcodec=None, pix_fmt=None):
     the expensive re-encode run - memory-light (threads=1, ~112MB peak RSS
     measured vs ~250MB default) because Render's free tier OOM-killed the
     whole process on ffmpeg's defaults, confirmed via crash+restart logs.
+    The slow path keeps its output at 960px / 30fps and stream-copies
+    already-AAC audio: on the free tier's tiny CPU allowance every saved
+    cycle is minutes of user-visible wait, and half the output size also
+    halves the Telegram upload.
     """
     if vcodec is None or pix_fmt is None:
-        _, _, _, vcodec, pix_fmt = probe_video_metadata(filepath)
-    if vcodec in ('h264', 'hevc') and pix_fmt == 'yuv420p':
+        _, _, _, vcodec, pix_fmt, acodec = probe_video_metadata(filepath)
+    if is_stream_compatible(vcodec, pix_fmt):
         return remux_clean(filepath)
 
     logger.info(
         "Incompatible stream (vcodec=%r pix_fmt=%r) in %s - re-encoding",
         vcodec, pix_fmt, filepath,
     )
+    audio_args = ['-c:a', 'copy'] if acodec == 'aac' else ['-c:a', 'aac', '-b:a', '128k']
     fixed_path = f'{filepath}.fixed.mp4'
     try:
         result = subprocess.run(
             [
                 FFMPEG_PATH, '-y', '-i', filepath,
                 '-map', '0:v:0', '-map', '0:a:0?',
-                '-vf', "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+                '-vf', "scale='min(960,iw)':'min(960,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30",
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-threads', '1',
                 '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac', '-b:a', '128k',
+                *audio_args,
                 '-avoid_negative_ts', 'make_zero',
                 '-movflags', '+faststart',
                 fixed_path,
             ],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300,
         )
         if result.returncode != 0 or not os.path.exists(fixed_path):
             logger.error(
@@ -310,6 +330,8 @@ NO_VIDEO_FOUND_MESSAGE = "🤔 ما لقيت فيديو بهذا الرابط\n�
 YOUTUBE_BLOCKED_MESSAGE = "😅 يوتيوب ما موافق علي الوقت\n🎵 جرّب تيك توك أو 👻 سناب شات بدله"
 
 GENERIC_ERROR_MESSAGE = "😅 صار شي غريب من جهتي! جرّب مرة ثانية ولا جرّب رابط ثاني 🙌"
+
+SLOW_CONVERSION_MESSAGE = "⚙️ هذا المقطع بصيغة خاصة ويحتاج معالجة إضافية — ممكن ياخذ كم دقيقة، اصبر عليّ 🙏"
 
 
 def friendly_error_message(url, error_text):
@@ -437,12 +459,14 @@ def download(message):
         if not os.path.exists(filename):
             raise FileNotFoundError("الملف أكبر من 50MB")
 
-        duration, width, height, vcodec, pix_fmt = probe_video_metadata(filename)
-        processed = ensure_playable(filename, vcodec, pix_fmt)
+        duration, width, height, vcodec, pix_fmt, acodec = probe_video_metadata(filename)
+        if not is_stream_compatible(vcodec, pix_fmt):
+            bot.reply_to(message, SLOW_CONVERSION_MESSAGE)
+        processed = ensure_playable(filename, vcodec, pix_fmt, acodec)
         if processed != filename:
             filename = processed
-            # dimensions may have changed (1280px cap) - re-read from the new file
-            duration, width, height, vcodec, pix_fmt = probe_video_metadata(filename)
+            # dimensions may have changed (960px cap) - re-read from the new file
+            duration, width, height, vcodec, pix_fmt, acodec = probe_video_metadata(filename)
 
         if os.path.getsize(filename) > MAX_TELEGRAM_FILE_SIZE:
             raise FileNotFoundError("الملف أكبر من 50MB")
@@ -452,7 +476,7 @@ def download(message):
         height = height or info.get('height')
         logger.info(
             "Downloaded %s: duration=%s width=%s height=%s vcodec=%s acodec=%s",
-            url, duration, width, height, vcodec, info.get('acodec'),
+            url, duration, width, height, vcodec, acodec or info.get('acodec'),
         )
 
         with open(filename, 'rb') as f:
