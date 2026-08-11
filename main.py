@@ -355,9 +355,14 @@ def download(message):
             # yt-dlp sets no socket timeout by default, so a stalled CDN
             # connection can hang a worker thread forever; overwrites=True
             # stops it from silently reusing a leftover file from an
-            # earlier hung/interrupted attempt at the same path.
+            # earlier hung/interrupted attempt at the same path. yt-dlp's
+            # default retry counts (10) combined with a 30s socket timeout
+            # could still take up to 5 minutes to finally give up on a
+            # truly dead connection, so cap retries tighter too.
             'socket_timeout': 30,
             'overwrites': True,
+            'retries': 3,
+            'fragment_retries': 3,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -424,6 +429,8 @@ def api_download():
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
             'ffmpeg_location': FFMPEG_PATH,
             'socket_timeout': 30,
+            'retries': 3,
+            'fragment_retries': 3,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
