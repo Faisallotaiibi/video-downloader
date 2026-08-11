@@ -163,6 +163,47 @@ def probe_video_metadata(filepath):
         logger.exception("Failed to probe video metadata for %s", filepath)
         return None, None, None
 
+
+def reencode_for_compatibility(filepath):
+    """Re-encode to a clean, standard H.264/AAC mp4.
+
+    yt-dlp's merger uses `-c copy` (no re-encode) to stay fast, which just
+    repackages whatever bitstream the source site served. Some sites
+    (Instagram's DASH-fragmented clips especially) hand over a technically
+    valid but slightly irregular stream - frame references or timestamps
+    that a lenient decoder (a seek/preview or desktop player) tolerates,
+    but that a strict one (Telegram's iOS player, or iOS's own camera roll
+    import) chokes on: playback freezes on the first frame while audio
+    keeps going, and saving the file fails outright. A real re-encode
+    produces a clean stream that plays and saves normally everywhere, at
+    the cost of some CPU time.
+    """
+    fixed_path = f'{filepath}.fixed.mp4'
+    try:
+        result = subprocess.run(
+            [
+                FFMPEG_PATH, '-y', '-i', filepath,
+                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-movflags', '+faststart',
+                fixed_path,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180,
+        )
+        if result.returncode != 0 or not os.path.exists(fixed_path):
+            logger.error(
+                "Re-encode failed for %s (exit %s): %s",
+                filepath, result.returncode, result.stderr.decode(errors='replace')[-2000:],
+            )
+            return filepath
+    except Exception:
+        logger.exception("Re-encode raised an exception for %s", filepath)
+        return filepath
+
+    os.remove(filepath)
+    return fixed_path
+
 # 'best' alone never triggers muxing, even with ffmpeg available - it only
 # picks an already-combined format. Ask for bestvideo+bestaudio explicitly
 # so separate-stream sites (Reddit, etc.) actually get merged. No ext filter
@@ -319,14 +360,15 @@ def download(message):
         if not os.path.exists(filename):
             raise FileNotFoundError("الملف أكبر من 50MB")
 
-        duration = info.get('duration')
-        width = info.get('width')
-        height = info.get('height')
-        if not duration or not width or not height:
-            probed_duration, probed_width, probed_height = probe_video_metadata(filename)
-            duration = duration or probed_duration
-            width = width or probed_width
-            height = height or probed_height
+        filename = reencode_for_compatibility(filename)
+
+        if os.path.getsize(filename) > MAX_TELEGRAM_FILE_SIZE:
+            raise FileNotFoundError("الملف أكبر من 50MB")
+
+        duration, width, height = probe_video_metadata(filename)
+        duration = duration or info.get('duration')
+        width = width or info.get('width')
+        height = height or info.get('height')
         logger.info(
             "Downloaded %s: duration=%s width=%s height=%s vcodec=%s acodec=%s",
             url, duration, width, height, info.get('vcodec'), info.get('acodec'),
