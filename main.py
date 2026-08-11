@@ -352,6 +352,12 @@ def download(message):
             'max_filesize': MAX_TELEGRAM_FILE_SIZE,
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
             'ffmpeg_location': FFMPEG_PATH,
+            # yt-dlp sets no socket timeout by default, so a stalled CDN
+            # connection can hang a worker thread forever; overwrites=True
+            # stops it from silently reusing a leftover file from an
+            # earlier hung/interrupted attempt at the same path.
+            'socket_timeout': 30,
+            'overwrites': True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -417,6 +423,7 @@ def api_download():
             'noplaylist': True,
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
             'ffmpeg_location': FFMPEG_PATH,
+            'socket_timeout': 30,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
