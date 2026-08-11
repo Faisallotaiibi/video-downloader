@@ -299,6 +299,25 @@ FORMAT_SELECTOR = (
     'bestvideo+bestaudio/best'
 )
 
+# Instagram (reels and posts share one extractor) exposes two format kinds:
+# ready-made progressive mp4s (video_versions - single h264 file, direct
+# from the CDN, no merging) and DASH fragment streams (separate video/audio
+# needing an ffmpeg merge; also where the VP9 variants live). The general
+# selector's bestvideo+bestaudio preference always chose the DASH pair
+# (confirmed in logs: "Downloading 1 format(s): dash-...v+dash-...a"),
+# paying merge time and container-quirk risk for nothing. Preferring any
+# combined (video+audio) format grabs the progressive file first - what
+# other download bots send, which is why they deliver faster - and falls
+# back to the normal chain when no progressive format exists.
+INSTAGRAM_FORMAT_SELECTOR = 'best[vcodec!=none][acodec!=none]/' + FORMAT_SELECTOR
+
+
+def format_selector_for(url):
+    host = urlparse(url).netloc.lower()
+    if 'instagram' in host:
+        return INSTAGRAM_FORMAT_SELECTOR
+    return FORMAT_SELECTOR
+
 WELCOME_MESSAGE = (
     "أهلين 👋 أنا مساعدك الخاص لتحميل أي فيديو تحبه\n\n"
     "بس الصق الرابط وأنا أسوي الباقي – بدون علامة مائية طبعًا 😉\n\n"
@@ -433,7 +452,7 @@ def download(message):
     filename = None
     try:
         ydl_opts = {
-            'format': FORMAT_SELECTOR,
+            'format': format_selector_for(url),
             'merge_output_format': 'mp4',
             'noplaylist': True,
             'outtmpl': '/tmp/%(id)s.%(ext)s',
