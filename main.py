@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import sqlite3
 import subprocess
 import threading
@@ -138,13 +139,21 @@ YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'ios', 'web']
 # /etc/secrets/<filename> and persists across deploys. Entirely
 # optional: every request just runs cookie-less, as before, if it's
 # not there.
-COOKIES_FILE = "/etc/secrets/cookies.txt"
-if os.path.exists(COOKIES_FILE):
-    logger.info("Using cookies from %s for authenticated requests", COOKIES_FILE)
+SECRET_COOKIES_FILE = "/etc/secrets/cookies.txt"
+# yt-dlp writes updated cookies back to the file on every run (sites
+# rotate session tokens), but Secret Files are mounted read-only
+# (confirmed in logs: "OSError: [Errno 30] Read-only file system:
+# '/etc/secrets/cookies.txt'", which killed the request entirely even
+# though extraction itself had already succeeded). Work from a writable
+# copy in /tmp instead - yt-dlp can update that copy freely.
+COOKIES_FILE = "/tmp/cookies.txt"
+if os.path.exists(SECRET_COOKIES_FILE):
+    shutil.copyfile(SECRET_COOKIES_FILE, COOKIES_FILE)
+    logger.info("Using cookies from %s (writable copy of %s)", COOKIES_FILE, SECRET_COOKIES_FILE)
 else:
     logger.info(
         "No cookies file at %s - requests are unauthenticated and more likely "
-        "to be rate-limited by YouTube/Instagram/X", COOKIES_FILE,
+        "to be rate-limited by YouTube/Instagram/X", SECRET_COOKIES_FILE,
     )
 
 
