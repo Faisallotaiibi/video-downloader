@@ -126,6 +126,31 @@ def db_query(sql, params=()):
 # works around most of these outages until yt-dlp ships a fix.
 YOUTUBE_EXTRACTOR_ARGS = {'youtube': {'player_client': ['android', 'ios', 'web']}}
 
+# Render's server IP is a recognized datacenter address, and YouTube/
+# Instagram/X increasingly rate-limit or outright block requests from
+# those (confirmed in logs: YouTube's "sign in to confirm you're not a
+# bot", Instagram "empty media response", Twitter "Video is unavailable"
+# - all on content that downloads instantly from residential IPs). A
+# cookies.txt (Netscape format) from a real logged-in session makes
+# outbound requests look like a real browser instead. Uploaded via
+# Render's "Secret Files" (not a regular env var - the file can be
+# several KB and env vars aren't meant for that), which mounts it at
+# /etc/secrets/<filename> and persists across deploys. Entirely
+# optional: every request just runs cookie-less, as before, if it's
+# not there.
+COOKIES_FILE = "/etc/secrets/cookies.txt"
+if os.path.exists(COOKIES_FILE):
+    logger.info("Using cookies from %s for authenticated requests", COOKIES_FILE)
+else:
+    logger.info(
+        "No cookies file at %s - requests are unauthenticated and more likely "
+        "to be rate-limited by YouTube/Instagram/X", COOKIES_FILE,
+    )
+
+
+def cookie_opts():
+    return {'cookiefile': COOKIES_FILE} if os.path.exists(COOKIES_FILE) else {}
+
 # Many sites (Reddit, etc.) serve video and audio as separate streams that
 # need muxing; the OS ffmpeg isn't installed on Render, so use the static
 # binary bundled by imageio-ffmpeg instead.
@@ -470,6 +495,7 @@ def download(message):
             'overwrites': True,
             'retries': 3,
             'fragment_retries': 3,
+            **cookie_opts(),
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -544,6 +570,7 @@ def api_download():
             'socket_timeout': 30,
             'retries': 3,
             'fragment_retries': 3,
+            **cookie_opts(),
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
