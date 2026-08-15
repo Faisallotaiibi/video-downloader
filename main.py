@@ -1078,6 +1078,21 @@ main { padding-top: 18px; }
 .empty-state { text-align: center; color: var(--text-muted); font-size: 13px; padding: 30px 10px; }
 
 /* ---------- Users list ---------- */
+.users-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+  min-height: 44px;
+}
+.users-summary::-webkit-details-marker { display: none; }
+.users-summary::marker { content: ''; }
+.users-summary h2 { margin-bottom: 0; }
+.users-summary-icon { flex-shrink: 0; color: var(--text-secondary); display: flex; transition: transform 0.2s; }
+.users-card[open] .users-summary-icon { transform: rotate(180deg); }
+.users-card .users-list { margin-top: 14px; }
 .users-list { display: flex; flex-direction: column; gap: 2px; }
 .user-row {
   display: flex;
@@ -1234,10 +1249,15 @@ main { padding-top: 18px; }
         <div class="legend" id="platformLegend"></div>
       </div>
 
-      <div class="card">
-        <h2>المستخدمون</h2>
+      <details class="card users-card">
+        <summary class="users-summary">
+          <h2>المستخدمون</h2>
+          <span class="users-summary-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </summary>
         <div class="users-list" id="usersList"></div>
-      </div>
+      </details>
 
       <div class="card">
         <h2>اتجاهات الاستخدام (آخر 14 يوم)</h2>
