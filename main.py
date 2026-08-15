@@ -679,6 +679,11 @@ def dashboard_data():
         "WHERE timestamp >= date('now', '-13 days') GROUP BY day ORDER BY day"
     )
     recent = db_query("SELECT * FROM usage_log ORDER BY id DESC LIMIT 200")
+    users = db_query(
+        "SELECT requester, COUNT(*) AS c FROM usage_log "
+        "WHERE requester IS NOT NULL AND requester != '' "
+        "GROUP BY requester ORDER BY c DESC LIMIT 100"
+    )
 
     daily_by_day = {row["day"]: row["c"] for row in daily}
     daily_series = []
@@ -693,6 +698,7 @@ def dashboard_data():
         "by_platform": [{"platform": r["platform"], "count": r["c"]} for r in by_platform],
         "daily": daily_series,
         "recent": recent,
+        "users": [{"requester": r["requester"], "count": r["c"]} for r in users],
         "persistent_storage": USE_TURSO,
     }
 
@@ -701,6 +707,19 @@ def dashboard_data():
 @require_dashboard_auth
 def api_dashboard_data():
     return jsonify(dashboard_data())
+
+
+@app.route("/api/dashboard-data/user-requests")
+@require_dashboard_auth
+def api_user_requests():
+    requester = (request.args.get("name") or "").strip()
+    if not requester:
+        return jsonify({"error": "missing name"}), 400
+    rows = db_query(
+        "SELECT * FROM usage_log WHERE requester = ? ORDER BY id DESC LIMIT 500",
+        (requester,),
+    )
+    return jsonify({"requester": requester, "requests": rows})
 
 
 DASHBOARD_TEMPLATE = """
@@ -1058,6 +1077,98 @@ main { padding-top: 18px; }
 .request-meta { font-size: 11px; color: var(--text-muted); direction: ltr; text-align: right; unicode-bidi: plaintext; }
 .empty-state { text-align: center; color: var(--text-muted); font-size: 13px; padding: 30px 10px; }
 
+/* ---------- Users list ---------- */
+.users-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+  min-height: 44px;
+}
+.users-summary::-webkit-details-marker { display: none; }
+.users-summary::marker { content: ''; }
+.users-summary h2 { margin-bottom: 0; }
+.users-summary-icon { flex-shrink: 0; color: var(--text-secondary); display: flex; transition: transform 0.2s; }
+.users-card[open] .users-summary-icon { transform: rotate(180deg); }
+.users-card .users-list { margin-top: 14px; }
+.users-list { display: flex; flex-direction: column; gap: 2px; }
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 9px 6px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: right;
+}
+.user-row:last-child { border-bottom: none; }
+.user-row:hover, .user-row:focus-visible { background: var(--surface-2); outline: none; }
+.user-avatar {
+  flex-shrink: 0;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; color: var(--text-secondary);
+}
+.user-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: ltr; text-align: right; unicode-bidi: plaintext; }
+.user-count { font-size: 12px; font-weight: 800; color: var(--text-secondary); background: var(--surface-2); padding: 3px 9px; border-radius: 20px; flex-shrink: 0; }
+.user-chevron { flex-shrink: 0; color: var(--text-muted); display: flex; }
+
+/* ---------- User sheet (drill-down) ---------- */
+.sheet-overlay {
+  position: fixed; inset: 0;
+  background: rgba(2, 6, 23, 0.7);
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+}
+.sheet-overlay[hidden] { display: none; }
+.sheet {
+  width: 100%;
+  max-height: 82vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--safe-bottom);
+}
+.sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sheet-title { min-width: 0; }
+.sheet-title .name { font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: ltr; text-align: right; unicode-bidi: plaintext; }
+.sheet-title .count { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.sheet-close {
+  flex-shrink: 0;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.sheet-close:hover, .sheet-close:focus-visible { filter: brightness(1.25); outline: 2px solid var(--accent); outline-offset: 2px; }
+.sheet-body { overflow-y: auto; padding: 14px 16px; }
+.sheet-body .request-list { gap: 10px; }
+
 @media (min-width: 480px) {
   .stats-scroll { flex-wrap: wrap; }
   .mini-card { flex: 1 1 0; }
@@ -1138,6 +1249,16 @@ main { padding-top: 18px; }
         <div class="legend" id="platformLegend"></div>
       </div>
 
+      <details class="card users-card">
+        <summary class="users-summary">
+          <h2>المستخدمون</h2>
+          <span class="users-summary-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </summary>
+        <div class="users-list" id="usersList"></div>
+      </details>
+
       <div class="card">
         <h2>اتجاهات الاستخدام (آخر 14 يوم)</h2>
         <svg class="line-svg" id="lineChart" viewBox="0 0 480 140" preserveAspectRatio="none" role="img" aria-label="اتجاه الاستخدام اليومي آخر 14 يوم"></svg>
@@ -1176,6 +1297,23 @@ main { padding-top: 18px; }
 </div>
 
 <div class="tooltip" id="tooltip"></div>
+
+<div class="sheet-overlay" id="sheetOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetUserName">
+    <div class="sheet-header">
+      <div class="sheet-title">
+        <div class="name" id="sheetUserName"></div>
+        <div class="count" id="sheetUserCount"></div>
+      </div>
+      <button type="button" class="sheet-close" id="sheetClose" aria-label="إغلاق">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <div class="request-list" id="sheetRequestList"></div>
+    </div>
+  </div>
+</div>
 
 <script>
 let allRows = [];
@@ -1436,20 +1574,13 @@ function applyFiltersAndSort() {
   renderRequestList(rows);
 }
 
-function renderRequestList(rows) {
-  const list = document.getElementById('requestList');
-  list.innerHTML = '';
-  if (rows.length === 0) {
-    list.innerHTML = '<div class="empty-state">لا توجد نتائج</div>';
-    return;
-  }
-  const sourceLabel = { telegram: 'تيليجرام', web: 'الموقع' };
-  rows.forEach(r => {
-    const icon = platformIcon(r.platform);
-    const isSuccess = r.status === 'success';
-    const card = document.createElement('div');
-    card.className = 'request-card';
-    card.innerHTML = `
+const SOURCE_LABEL = { telegram: 'تيليجرام', web: 'الموقع' };
+
+function requestCardHTML(r) {
+  const icon = platformIcon(r.platform);
+  const isSuccess = r.status === 'success';
+  return `
+    <div class="request-card">
       <div class="request-top">
         <span class="platform-badge">
           <span class="platform-badge-icon" style="background:${icon.bg}">${icon.svg}</span>
@@ -1460,11 +1591,72 @@ function renderRequestList(rows) {
         </span>
       </div>
       <a class="request-url" href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(r.url)}">${escapeHtml(r.url)}</a>
-      <div class="request-meta">${escapeHtml(r.requester || '')} · #${r.id} · ${escapeHtml(r.timestamp)} · ${sourceLabel[r.source] || escapeHtml(r.source)}</div>
-    `;
-    list.appendChild(card);
+      <div class="request-meta">${escapeHtml(r.requester || '')} · #${r.id} · ${escapeHtml(r.timestamp)} · ${SOURCE_LABEL[r.source] || escapeHtml(r.source)}</div>
+    </div>
+  `;
+}
+
+function renderRequestList(rows) {
+  const list = document.getElementById('requestList');
+  if (rows.length === 0) {
+    list.innerHTML = '<div class="empty-state">لا توجد نتائج</div>';
+    return;
+  }
+  list.innerHTML = rows.map(requestCardHTML).join('');
+}
+
+/* ---------- Users + drill-down sheet ---------- */
+function renderUsers(users) {
+  const list = document.getElementById('usersList');
+  if (!users || users.length === 0) {
+    list.innerHTML = '<div class="empty-state">لا يوجد مستخدمون بعد</div>';
+    return;
+  }
+  list.innerHTML = users.map(u => `
+    <button type="button" class="user-row" data-user="${escapeHtml(u.requester)}" data-count="${u.count}">
+      <span class="user-avatar" aria-hidden="true">${escapeHtml((u.requester || '?').replace('@', '')[0] || '?').toUpperCase()}</span>
+      <span class="user-name">${escapeHtml(u.requester)}</span>
+      <span class="user-count">${u.count}</span>
+      <span class="user-chevron" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></span>
+    </button>
+  `).join('');
+  list.querySelectorAll('.user-row').forEach(btn => {
+    btn.addEventListener('click', () => openUserSheet(btn.dataset.user, btn.dataset.count));
   });
 }
+
+const sheetOverlay = document.getElementById('sheetOverlay');
+let lastFocusedBeforeSheet = null;
+
+async function openUserSheet(requester, count) {
+  lastFocusedBeforeSheet = document.activeElement;
+  document.getElementById('sheetUserName').textContent = requester;
+  document.getElementById('sheetUserCount').textContent = `${count} طلب تحميل`;
+  const body = document.getElementById('sheetRequestList');
+  body.innerHTML = '<div class="empty-state">جاري التحميل...</div>';
+  sheetOverlay.hidden = false;
+  document.getElementById('sheetClose').focus();
+
+  try {
+    const res = await fetch(`/api/dashboard-data/user-requests?name=${encodeURIComponent(requester)}`);
+    if (!res.ok) throw new Error('request failed');
+    const data = await res.json();
+    body.innerHTML = data.requests.length
+      ? data.requests.map(requestCardHTML).join('')
+      : '<div class="empty-state">لا توجد طلبات</div>';
+  } catch (e) {
+    body.innerHTML = '<div class="empty-state">تعذر تحميل طلبات هذا المستخدم</div>';
+  }
+}
+
+function closeUserSheet() {
+  sheetOverlay.hidden = true;
+  if (lastFocusedBeforeSheet) lastFocusedBeforeSheet.focus();
+}
+
+document.getElementById('sheetClose').addEventListener('click', closeUserSheet);
+sheetOverlay.addEventListener('click', e => { if (e.target === sheetOverlay) closeUserSheet(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !sheetOverlay.hidden) closeUserSheet(); });
 
 /* ---------- Avatar dropdown ---------- */
 const avatarBtn = document.getElementById('avatarBtn');
@@ -1504,6 +1696,7 @@ async function loadData() {
     allRows = data.recent;
     renderStats(data);
     renderDonut(data.by_platform);
+    renderUsers(data.users);
     renderLineChart(data.daily);
     applyFiltersAndSort();
     document.getElementById('loading').style.display = 'none';
