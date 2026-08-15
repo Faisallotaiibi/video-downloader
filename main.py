@@ -467,6 +467,37 @@ def log_usage(source, requester, url, status, error=None):
         logger.exception("Failed to log usage")
 
 
+# Instagram throttles anonymous/burst traffic with errors that clear up on
+# their own a few seconds later (confirmed in yt-dlp's own instagram.py:
+# "You have exceeded the rate-limit for accessing posts anonymously" and
+# "Instagram sent an empty media response") - unlike a real 404 or a
+# too-large file, retrying the exact same request shortly after tends to
+# just work. Scoped to Instagram only via detect_platform(); every other
+# site still gets exactly one attempt, unchanged.
+INSTAGRAM_TRANSIENT_ERROR_RE = re.compile(r'rate-limit|empty media response', re.IGNORECASE)
+INSTAGRAM_RETRY_ATTEMPTS = 3
+INSTAGRAM_RETRY_DELAY = 3
+
+
+def extract_info_with_retry(ydl_opts, url, download):
+    attempts = INSTAGRAM_RETRY_ATTEMPTS if detect_platform(url) == "Instagram" else 1
+    delay = INSTAGRAM_RETRY_DELAY
+    for attempt in range(1, attempts + 1):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=download)
+                return ydl, info
+        except yt_dlp.utils.DownloadError as e:
+            if attempt == attempts or not INSTAGRAM_TRANSIENT_ERROR_RE.search(str(e)):
+                raise
+            logger.info(
+                "Instagram request looked rate-limited (attempt %s/%s) for %s - retrying in %ss",
+                attempt, attempts, url, delay,
+            )
+            time.sleep(delay)
+            delay *= 2
+
+
 def keep_alive():
     while True:
         try:
@@ -522,9 +553,8 @@ def download(message):
             'fragment_retries': 3,
             **cookie_opts_for(url),
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
+        ydl, info = extract_info_with_retry(ydl_opts, url, download=True)
+        filename = ydl.prepare_filename(info)
 
         if not os.path.exists(filename):
             raise FileNotFoundError("الملف أكبر من 50MB")
@@ -597,8 +627,7 @@ def api_download():
             'fragment_retries': 3,
             **cookie_opts_for(url),
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        _, info = extract_info_with_retry(ydl_opts, url, download=False)
 
         direct_url = info.get("url")
         if not direct_url and info.get("formats"):
