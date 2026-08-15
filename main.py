@@ -157,7 +157,23 @@ else:
     )
 
 
-def cookie_opts():
+def cookie_opts_for(url):
+    """cookiefile kwarg for yt-dlp, withheld for YouTube.
+
+    Confirmed live (Render logs, 2026-08-15): once a cookiefile is passed,
+    yt-dlp skips the android/ios clients outright ("does not support
+    cookies" - those clients don't send cookies at all, by yt-dlp's own
+    design) and falls through to the web client alone. The web client needs
+    an n-challenge/nsig JS solver we don't have installed, so every request
+    then failed with "n challenge solving failed" -> "Only images are
+    available for download". android/ios already worked reliably for
+    YouTube without cookies (see YOUTUBE_EXTRACTOR_ARGS above), so cookies
+    would only ever narrow YouTube down to the one client that's broken
+    here. Twitter/X and Instagram have no such client-selection fallout, so
+    they keep using the cookie file.
+    """
+    if detect_platform(url) == "YouTube":
+        return {}
     return {'cookiefile': COOKIES_FILE} if os.path.exists(COOKIES_FILE) else {}
 
 # Many sites (Reddit, etc.) serve video and audio as separate streams that
@@ -504,7 +520,7 @@ def download(message):
             'overwrites': True,
             'retries': 3,
             'fragment_retries': 3,
-            **cookie_opts(),
+            **cookie_opts_for(url),
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -579,7 +595,7 @@ def api_download():
             'socket_timeout': 30,
             'retries': 3,
             'fragment_retries': 3,
-            **cookie_opts(),
+            **cookie_opts_for(url),
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
