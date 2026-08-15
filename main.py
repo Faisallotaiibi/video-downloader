@@ -708,56 +708,145 @@ DASHBOARD_TEMPLATE = """
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>لوحة التحكم</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Almarai:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #0a0a0a;
-  --surface: #141414;
-  --surface-2: #1c1c1c;
-  --border: #2a2a2a;
-  --text-primary: #f2f2f2;
-  --text-secondary: #9a9a9a;
-  --text-muted: #6b6b6b;
-  --bar-dim: #3a3a3a;
-  --bar-bright: #f2f2f2;
-  --status-good: #0ca30c;
-  --status-critical: #d03b3b;
+  --bg: #020617;
+  --surface: #0F172A;
+  --surface-2: #1E293B;
+  --border: #334155;
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --text-muted: #8494AB;
+  --success: #22C55E;
+  --danger: #EF4444;
+  --accent: #60A5FA;
+  --donut-1: #F472B6;
+  --donut-2: #22D3EE;
+  --donut-3: #A78BFA;
+  --donut-4: #FBBF24;
+  --donut-other: #94A3B8;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { overflow-x: hidden; max-width: 100%; }
 body {
-  font-family: 'Segoe UI', sans-serif;
+  font-family: 'Almarai', 'Segoe UI', sans-serif;
   background: var(--bg);
   color: var(--text-primary);
   min-height: 100vh;
-  padding: 30px 15px 60px;
+  min-height: 100dvh;
+  padding-bottom: calc(28px + var(--safe-bottom));
+  font-size: 16px;
+  line-height: 1.5;
 }
-.wrap { max-width: 1100px; margin: 0 auto; }
-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 8px; }
-h1 { font-size: 20px; font-weight: 600; }
-.refresh-note { font-size: 12px; color: var(--text-muted); }
-.stats { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
-.card {
-  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0) 45%), var(--surface);
+.wrap { max-width: 640px; margin: 0 auto; padding: 0 16px; }
+a { color: inherit; }
+button { font-family: inherit; }
+
+/* ---------- Header ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(14px + var(--safe-top)) 16px 14px;
+  background: rgba(2, 6, 23, 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-icon {
+  flex-shrink: 0;
+  width: 38px; height: 38px;
+  border-radius: 11px;
+  background: linear-gradient(160deg, var(--surface-2), var(--surface));
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 20px;
-  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
-  margin-bottom: 16px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
 }
-.stat-card { flex: 1; min-width: 140px; }
-.stat-card .num { font-size: 32px; font-weight: 700; font-variant-numeric: proportional-nums; }
-.stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
-.stat-card.good .num { color: var(--status-good); }
-.stat-card.critical .num { color: var(--status-critical); }
-.trend { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-top: 8px; font-weight: 600; }
-.trend.up { color: var(--status-good); }
-.trend.down { color: var(--status-critical); }
-.trend.flat { color: var(--text-muted); }
-.card h2 { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 16px; }
-#loading { color: var(--text-muted); font-size: 13px; padding: 20px 0; text-align: center; }
+.brand-text { min-width: 0; }
+.brand-text h1 { font-size: 15px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-sub { display: block; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.avatar-menu { position: relative; flex-shrink: 0; }
+.avatar-btn {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-weight: 800;
+  font-size: 15px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: filter 0.15s;
+}
+.avatar-btn:hover, .avatar-btn:focus-visible { filter: brightness(1.25); outline: 2px solid var(--accent); outline-offset: 2px; }
+.avatar-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 190px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.5);
+  padding: 6px;
+  z-index: 40;
+}
+.avatar-dropdown[hidden] { display: none; }
+.avatar-dropdown-user {
+  padding: 10px 12px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.avatar-dropdown-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px;
+  min-height: 44px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: right;
+}
+.avatar-dropdown-item:hover { background: rgba(239, 68, 68, 0.12); }
+.avatar-dropdown-item:focus-visible { background: rgba(239, 68, 68, 0.12); outline: 2px solid var(--danger); outline-offset: -2px; }
+
+/* ---------- Layout / cards ---------- */
+main { padding-top: 18px; }
+.card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0) 45%), var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+  margin-bottom: 14px;
+}
+.card h2 { font-size: 13px; font-weight: 700; color: var(--text-secondary); margin-bottom: 14px; }
+#loading { color: var(--text-muted); font-size: 13px; padding: 40px 0; text-align: center; }
 #content { transition: opacity 0.2s; }
+#content.stale { opacity: 0.55; }
 
 @media (prefers-reduced-motion: no-preference) {
   #content.reveal .card {
@@ -768,32 +857,103 @@ h1 { font-size: 20px; font-weight: 600; }
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
   }
-  .bar { transition: height 0.5s cubic-bezier(.2,.8,.2,1), filter 0.15s; }
   .trend.pulse { animation: trendPop 0.4s ease; }
   @keyframes trendPop {
     0% { transform: scale(1); }
     35% { transform: scale(1.12); }
     100% { transform: scale(1); }
   }
+  .line-path { animation: drawLine 0.9s ease forwards; }
+  @keyframes drawLine {
+    from { stroke-dashoffset: var(--len); }
+    to { stroke-dashoffset: 0; }
+  }
 }
-#content.stale { opacity: 0.55; }
 
-.chart-scroll { overflow-x: auto; }
-.chart-inner { min-width: 480px; }
-.bar-chart { display: flex; align-items: flex-end; gap: 4px; height: 120px; position: relative; }
-.bar-col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-.bar {
-  width: 100%;
-  max-width: 22px;
-  border-radius: 4px 4px 0 0;
-  background: var(--bar-dim);
-  min-height: 3px;
-  cursor: pointer;
-  transition: filter 0.15s;
+.refresh-note { display: block; font-size: 11px; color: var(--text-muted); margin: -4px 0 14px; }
+
+/* ---------- Stats: hero + horizontal scroll ---------- */
+.stats { margin-bottom: 4px; }
+.hero-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
-.bar:hover, .bar:focus { filter: brightness(1.3); outline: none; }
-.bar-labels { display: flex; gap: 4px; margin-top: 8px; }
-.bar-labels span { flex: 1; min-width: 0; text-align: center; font-size: 10px; color: var(--text-muted); }
+.hero-icon {
+  flex-shrink: 0;
+  width: 52px; height: 52px;
+  border-radius: 14px;
+  background: rgba(34, 197, 94, 0.14);
+  color: var(--success);
+  display: flex; align-items: center; justify-content: center;
+}
+.hero-body { min-width: 0; flex: 1; }
+.hero-label { font-size: 13px; color: var(--text-secondary); font-weight: 700; }
+.hero-num { font-size: 38px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.15; color: var(--success); }
+.trend { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-top: 4px; font-weight: 700; }
+.trend.up { color: var(--success); }
+.trend.down { color: var(--danger); }
+.trend.flat { color: var(--text-muted); }
+
+.stats-scroll {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 2px 12px;
+  margin: 0 -2px 2px;
+  scroll-snap-type: x proximity;
+}
+.mini-card {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  min-width: 130px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mini-icon {
+  width: 34px; height: 34px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  display: flex; align-items: center; justify-content: center;
+}
+.mini-card.good .mini-icon { background: rgba(34, 197, 94, 0.14); color: var(--success); }
+.mini-card.critical .mini-icon { background: rgba(239, 68, 68, 0.14); color: var(--danger); }
+.mini-num { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.mini-card.good .mini-num { color: var(--success); }
+.mini-card.critical .mini-num { color: var(--danger); }
+.mini-label { font-size: 11px; color: var(--text-secondary); font-weight: 700; }
+
+/* ---------- Donut + legend ---------- */
+.donut-wrap { display: flex; justify-content: center; margin-bottom: 16px; }
+.donut { width: 172px; height: 172px; }
+.donut-seg { transition: opacity 0.15s; }
+.donut-total { fill: var(--text-primary); font-size: 22px; font-weight: 800; font-family: 'Almarai', sans-serif; }
+.donut-total-label { fill: var(--text-muted); font-size: 10px; font-family: 'Almarai', sans-serif; }
+.legend { display: flex; flex-direction: column; gap: 2px; }
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 4px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--border);
+}
+.legend-item:last-child { border-bottom: none; }
+.legend-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+.legend-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend-count { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.legend-pct { font-size: 13px; font-weight: 800; color: var(--text-secondary); min-width: 42px; text-align: left; direction: ltr; }
+
+/* ---------- Line chart ---------- */
+.line-svg { width: 100%; height: 140px; display: block; overflow: visible; }
+.line-axis-label { fill: var(--text-muted); font-size: 9px; font-family: 'Almarai', sans-serif; }
+.line-point { cursor: pointer; }
+.line-point:hover, .line-point:focus { outline: none; }
+.line-point:focus circle:last-child { stroke-width: 3; r: 4.5; }
+.line-point circle.hit { fill: transparent; }
 .tooltip {
   position: fixed;
   background: var(--surface-2);
@@ -802,130 +962,237 @@ h1 { font-size: 20px; font-weight: 600; }
   padding: 6px 10px;
   font-size: 12px;
   pointer-events: none;
-  z-index: 10;
+  z-index: 50;
   display: none;
   box-shadow: 0 8px 20px rgba(0,0,0,0.4);
 }
-.tooltip .v { font-weight: 700; color: var(--text-primary); }
+.tooltip .v { font-weight: 800; color: var(--text-primary); }
 .tooltip .d { color: var(--text-secondary); }
 
-.platform-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: 13px; }
-.platform-name { width: 100px; flex-shrink: 0; color: var(--text-secondary); }
-.platform-track { flex: 1; background: var(--surface-2); border-radius: 6px; height: 10px; overflow: hidden; }
-.platform-fill { display: block; height: 100%; background: linear-gradient(90deg, #6b6b6b, var(--bar-bright)); border-radius: 6px; }
-.platform-count { width: 90px; text-align: left; direction: ltr; color: var(--text-muted); font-size: 12px; }
-
+/* ---------- Toolbar / filters ---------- */
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .toolbar input[type="text"] {
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 10px;
+  padding: 11px 14px;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 14px;
   min-width: 200px;
   flex: 1;
+  min-height: 44px;
 }
 .toolbar input[type="text"]::placeholder { color: var(--text-muted); }
+.toolbar select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  min-height: 44px;
+  min-width: 44px;
+}
+.chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 20px;
-  padding: 6px 14px;
+  padding: 9px 16px;
+  min-height: 44px;
   font-size: 12px;
+  font-weight: 700;
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
+  display: inline-flex;
+  align-items: center;
 }
-.chip.active { background: var(--text-primary); color: #000; border-color: var(--text-primary); font-weight: 600; }
+.chip.active { background: var(--text-primary); color: #020617; border-color: var(--text-primary); }
 
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { padding: 9px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
-th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; cursor: pointer; user-select: none; }
-th:hover { color: var(--text-secondary); }
-td { color: var(--text-secondary); }
-.table-wrap { overflow-x: auto; }
-td.url { max-width: 280px; overflow: hidden; text-overflow: ellipsis; direction: ltr; text-align: left; }
-td.url a { color: var(--text-primary); text-decoration: none; border-bottom: 1px dotted var(--text-muted); }
-td.url a:hover { color: #fff; }
-.status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.status-dot.success { background: var(--status-good); }
-.status-dot.failed { background: var(--status-critical); }
-.empty-row td { text-align: center; color: var(--text-muted); padding: 24px; }
+/* ---------- Request cards (replaces table) ---------- */
+.request-list { display: flex; flex-direction: column; gap: 10px; }
+.request-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 13px 14px;
+}
+.request-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.platform-badge { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 800; min-width: 0; }
+.platform-badge-icon {
+  flex-shrink: 0;
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.platform-badge-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 800;
+}
+.status-pill.success { background: rgba(34, 197, 94, 0.14); color: var(--success); }
+.status-pill.failed { background: rgba(239, 68, 68, 0.14); color: var(--danger); }
+.request-url {
+  display: block;
+  font-size: 12.5px;
+  color: var(--accent);
+  text-decoration: none;
+  direction: ltr;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px dotted transparent;
+  margin-bottom: 8px;
+}
+.request-url:hover, .request-url:focus-visible { border-bottom-color: var(--accent); outline: none; }
+.request-meta { font-size: 11px; color: var(--text-muted); direction: ltr; text-align: right; unicode-bidi: plaintext; }
+.empty-state { text-align: center; color: var(--text-muted); font-size: 13px; padding: 30px 10px; }
+
+@media (min-width: 480px) {
+  .stats-scroll { flex-wrap: wrap; }
+  .mini-card { flex: 1 1 0; }
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>📊 لوحة تحكم البوت</h1>
-    <span class="refresh-note" id="refreshNote">
-      <span id="storageNote"></span> · يحدّث تلقائيًا كل 30 ثانية
-    </span>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </span>
+      <div class="brand-text">
+        <h1>لوحة التحكم</h1>
+        <span class="brand-sub">إحصائيات بوت التيليجرام</span>
+      </div>
+    </div>
+    <div class="avatar-menu">
+      <button type="button" class="avatar-btn" id="avatarBtn" aria-haspopup="true" aria-expanded="false" aria-label="قائمة الحساب">{{ (username or '?')[0] | upper }}</button>
+      <div class="avatar-dropdown" id="avatarDropdown" role="menu" hidden>
+        <div class="avatar-dropdown-user">{{ username }}</div>
+        <button type="button" class="avatar-dropdown-item" id="logoutBtn" role="menuitem">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          تسجيل الخروج
+        </button>
+      </div>
+    </div>
   </header>
 
-  <div id="loading">جاري التحميل...</div>
-  <div id="content" style="display:none">
-    <div class="stats">
-      <div class="card stat-card"><div class="num" id="statTotal">0</div><div class="label">إجمالي الاستخدامات</div><div class="trend" id="statTrend"></div></div>
-      <div class="card stat-card good"><div class="num" id="statSuccess">0</div><div class="label">ناجحة</div></div>
-      <div class="card stat-card critical"><div class="num" id="statFailed">0</div><div class="label">فاشلة</div></div>
-    </div>
+  <main>
+    <div id="loading">جاري التحميل...</div>
+    <div id="content" style="display:none">
 
-    <div class="card">
-      <h2>الاستخدام آخر 14 يوم</h2>
-      <div class="chart-scroll">
-        <div class="chart-inner">
-          <div class="bar-chart" id="barChart"></div>
-          <div class="bar-labels" id="barLabels"></div>
+      <section class="stats">
+        <div class="card hero-card">
+          <span class="hero-icon" aria-hidden="true">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          </span>
+          <div class="hero-body">
+            <div class="hero-label">معدل النجاح</div>
+            <div class="hero-num" id="statRate">0%</div>
+            <div class="trend" id="statTrend"></div>
+          </div>
         </div>
-      </div>
-    </div>
 
-    <div class="card">
-      <h2>حسب المنصة</h2>
-      <div id="platformList"></div>
-    </div>
+        <div class="stats-scroll">
+          <div class="card mini-card">
+            <span class="mini-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </span>
+            <div class="mini-num" id="statTotal">0</div>
+            <div class="mini-label">إجمالي الاستخدامات</div>
+          </div>
+          <div class="card mini-card good">
+            <span class="mini-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+            <div class="mini-num" id="statSuccess">0</div>
+            <div class="mini-label">ناجحة</div>
+          </div>
+          <div class="card mini-card critical">
+            <span class="mini-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </span>
+            <div class="mini-num" id="statFailed">0</div>
+            <div class="mini-label">فاشلة</div>
+          </div>
+        </div>
+        <span class="refresh-note" id="refreshNote"><span id="storageNote"></span> · يحدّث تلقائيًا كل 30 ثانية</span>
+      </section>
 
-    <div class="card">
-      <h2>آخر الطلبات</h2>
-      <div class="toolbar">
-        <input type="text" id="search" placeholder="ابحث بالمستخدم أو الرابط أو المنصة...">
-        <span class="chip active" data-filter="status" data-value="all">الكل</span>
-        <span class="chip" data-filter="status" data-value="success">ناجحة</span>
-        <span class="chip" data-filter="status" data-value="failed">فاشلة</span>
-        <span class="chip active" data-filter="source" data-value="all">كل المصادر</span>
-        <span class="chip" data-filter="source" data-value="telegram">تيليجرام</span>
-        <span class="chip" data-filter="source" data-value="web">الموقع</span>
+      <div class="card">
+        <h2>توزيع المنصات</h2>
+        <div class="donut-wrap">
+          <svg viewBox="0 0 160 160" class="donut" id="donutChart" role="img" aria-label="توزيع الاستخدام حسب المنصة"></svg>
+        </div>
+        <div class="legend" id="platformLegend"></div>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th data-key="timestamp">الوقت (UTC)</th>
-              <th data-key="source">المصدر</th>
-              <th data-key="requester">المستخدم</th>
-              <th data-key="platform">المنصة</th>
-              <th>الرابط</th>
-              <th data-key="status">الحالة</th>
-            </tr>
-          </thead>
-          <tbody id="tableBody"></tbody>
-        </table>
+
+      <div class="card">
+        <h2>اتجاهات الاستخدام (آخر 14 يوم)</h2>
+        <svg class="line-svg" id="lineChart" viewBox="0 0 480 140" preserveAspectRatio="none" role="img" aria-label="اتجاه الاستخدام اليومي آخر 14 يوم"></svg>
       </div>
+
+      <div class="card">
+        <h2>أحدث طلبات التحميل</h2>
+        <div class="toolbar">
+          <input type="text" id="search" placeholder="ابحث بالمستخدم أو الرابط أو المنصة...">
+          <select id="sortSelect" aria-label="ترتيب حسب">
+            <option value="timestamp_desc">الأحدث أولاً</option>
+            <option value="timestamp_asc">الأقدم أولاً</option>
+            <option value="status">حسب الحالة</option>
+            <option value="platform">حسب المنصة</option>
+          </select>
+        </div>
+        <div class="toolbar">
+          <div class="chip-row">
+            <span class="chip active" data-filter="status" data-value="all">الكل</span>
+            <span class="chip" data-filter="status" data-value="success">ناجحة</span>
+            <span class="chip" data-filter="status" data-value="failed">فاشلة</span>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="chip-row">
+            <span class="chip active" data-filter="source" data-value="all">كل المصادر</span>
+            <span class="chip" data-filter="source" data-value="telegram">تيليجرام</span>
+            <span class="chip" data-filter="source" data-value="web">الموقع</span>
+          </div>
+        </div>
+        <div class="request-list" id="requestList"></div>
+      </div>
+
     </div>
-  </div>
+  </main>
 </div>
 
 <div class="tooltip" id="tooltip"></div>
 
 <script>
 let allRows = [];
-let sortKey = 'timestamp';
-let sortDir = -1;
+let sortValue = 'timestamp_desc';
 let statusFilter = 'all';
 let sourceFilter = 'all';
 let lastTrendText = null;
+
+const PLATFORM_ICONS = {
+  'YouTube': { bg: '#EF4444', svg: '<svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><path d="M8 6v12l10-6z"/></svg>' },
+  'TikTok': { bg: '#111827', svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l7 2v9a3 3 0 1 1-3-3"/></svg>' },
+  'Instagram': { bg: 'linear-gradient(135deg,#F472B6,#A78BFA)', svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1"/></svg>' },
+  'Twitter/X': { bg: '#111827', svg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"><line x1="4" y1="4" x2="20" y2="20"/><line x1="20" y1="4" x2="4" y2="20"/></svg>' },
+};
+const DEFAULT_PLATFORM_ICON = { bg: '#334155', svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>' };
+const ICON_CHECK = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const ICON_X = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
 function escapeHtml(s) {
   const d = document.createElement('div');
@@ -933,10 +1200,18 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+function platformIcon(name) {
+  return PLATFORM_ICONS[name] || DEFAULT_PLATFORM_ICON;
+}
+
+/* ---------- Stats ---------- */
 function renderStats(data) {
+  const rate = data.total ? Math.round((data.success / data.total) * 1000) / 10 : 0;
+  document.getElementById('statRate').textContent = rate + '%';
   document.getElementById('statTotal').textContent = data.total;
   document.getElementById('statSuccess').textContent = data.success;
   document.getElementById('statFailed').textContent = data.failed;
+
   const storageNote = document.getElementById('storageNote');
   if (storageNote) {
     storageNote.textContent = data.persistent_storage
@@ -950,102 +1225,192 @@ function renderStats(data) {
     const yesterday = data.daily[data.daily.length - 2].count;
     const diff = today - yesterday;
     let cls, text;
-    if (diff > 0) {
-      cls = 'trend up';
-      text = `↑ +${diff} اليوم`;
-    } else if (diff < 0) {
-      cls = 'trend down';
-      text = `↓ ${diff} اليوم`;
-    } else {
-      cls = 'trend flat';
-      text = '— بدون تغيير اليوم';
-    }
+    if (diff > 0) { cls = 'trend up'; text = `↑ +${diff} اليوم`; }
+    else if (diff < 0) { cls = 'trend down'; text = `↓ ${diff} اليوم`; }
+    else { cls = 'trend flat'; text = '— بدون تغيير اليوم'; }
     trend.textContent = text;
     if (text !== lastTrendText) {
       trend.className = cls;
-      void trend.offsetWidth; // restart the pulse animation on change
+      void trend.offsetWidth;
       trend.className = cls + ' pulse';
       lastTrendText = text;
     }
   }
 }
 
-function renderBarChart(daily) {
-  const chart = document.getElementById('barChart');
-  const labels = document.getElementById('barLabels');
-  const tooltip = document.getElementById('tooltip');
-  chart.innerHTML = '';
-  labels.innerHTML = '';
-  const max = Math.max(1, ...daily.map(d => d.count));
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const grownBars = [];
+/* ---------- Donut + legend ---------- */
+const DONUT_COLORS = ['var(--donut-1)', 'var(--donut-2)', 'var(--donut-3)', 'var(--donut-4)'];
+const MAX_DONUT_SLICES = 5;
 
-  daily.forEach(d => {
-    const col = document.createElement('div');
-    col.className = 'bar-col';
-    const bar = document.createElement('div');
-    bar.className = 'bar';
-    const pct = d.count / max;
-    const targetHeight = Math.max(3, pct * 100) + '%';
-    bar.style.height = reduceMotion ? targetHeight : '0%';
-    const lightness = 35 + pct * 55;
-    bar.style.background = `hsl(0, 0%, ${lightness}%)`;
-    bar.tabIndex = 0;
-    bar.addEventListener('mouseenter', e => showTooltip(e, d));
-    bar.addEventListener('focus', e => showTooltip(e, d));
-    bar.addEventListener('mousemove', e => positionTooltip(e));
-    bar.addEventListener('mouseleave', hideTooltip);
-    bar.addEventListener('blur', hideTooltip);
-    col.appendChild(bar);
-    chart.appendChild(col);
-    if (!reduceMotion) grownBars.push({ el: bar, targetHeight });
+function renderDonut(byPlatform) {
+  const svg = document.getElementById('donutChart');
+  const legend = document.getElementById('platformLegend');
+  const total = byPlatform.reduce((s, p) => s + p.count, 0);
 
-    const lbl = document.createElement('span');
-    const shortDay = d.day.slice(5).replace('-', '/');
-    lbl.textContent = shortDay;
-    labels.appendChild(lbl);
-  });
+  svg.innerHTML = '';
+  legend.innerHTML = '';
 
-  if (grownBars.length) {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      grownBars.forEach(({ el, targetHeight }) => { el.style.height = targetHeight; });
-    }));
-  }
-
-  function showTooltip(e, d) {
-    tooltip.innerHTML = `<span class="v">${d.count}</span> <span class="d">— ${d.day}</span>`;
-    tooltip.style.display = 'block';
-    positionTooltip(e);
-  }
-  function positionTooltip(e) {
-    const rect = e.target.getBoundingClientRect();
-    tooltip.style.left = (rect.left + rect.width / 2 - tooltip.offsetWidth / 2) + 'px';
-    tooltip.style.top = (rect.top - 40) + 'px';
-  }
-  function hideTooltip() { tooltip.style.display = 'none'; }
-}
-
-function renderPlatforms(byPlatform) {
-  const container = document.getElementById('platformList');
-  container.innerHTML = '';
-  const max = Math.max(1, ...byPlatform.map(p => p.count));
-  if (byPlatform.length === 0) {
-    container.innerHTML = '<div class="empty-row" style="color:var(--text-muted);font-size:13px;">لا توجد بيانات بعد</div>';
+  if (total === 0) {
+    legend.innerHTML = '<div class="empty-state">لا توجد بيانات بعد</div>';
+    const track = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    track.setAttribute('cx', '80'); track.setAttribute('cy', '80'); track.setAttribute('r', '60');
+    track.setAttribute('fill', 'none'); track.setAttribute('stroke', 'var(--surface-2)'); track.setAttribute('stroke-width', '20');
+    svg.appendChild(track);
     return;
   }
-  byPlatform.forEach(p => {
+
+  let slices = byPlatform.slice();
+  if (slices.length > MAX_DONUT_SLICES) {
+    const head = slices.slice(0, MAX_DONUT_SLICES - 1);
+    const restCount = slices.slice(MAX_DONUT_SLICES - 1).reduce((s, p) => s + p.count, 0);
+    slices = head.concat([{ platform: 'أخرى', count: restCount }]);
+  }
+
+  const r = 60, cx = 80, cy = 80, circumference = 2 * Math.PI * r, strokeW = 20;
+
+  const track = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  track.setAttribute('cx', cx); track.setAttribute('cy', cy); track.setAttribute('r', r);
+  track.setAttribute('fill', 'none'); track.setAttribute('stroke', 'var(--surface-2)'); track.setAttribute('stroke-width', strokeW);
+  svg.appendChild(track);
+
+  const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  group.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
+  svg.appendChild(group);
+
+  let offset = 0;
+  slices.forEach((p, i) => {
+    const pct = p.count / total;
+    const dash = pct * circumference;
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('class', 'donut-seg');
+    circle.setAttribute('cx', cx); circle.setAttribute('cy', cy); circle.setAttribute('r', r);
+    circle.setAttribute('fill', 'none');
+    circle.setAttribute('stroke', p.platform === 'أخرى' ? 'var(--donut-other)' : DONUT_COLORS[i % DONUT_COLORS.length]);
+    circle.setAttribute('stroke-width', strokeW);
+    circle.setAttribute('stroke-dasharray', `${dash} ${circumference - dash}`);
+    circle.setAttribute('stroke-dashoffset', -offset);
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = `${p.platform}: ${p.count} (${Math.round(pct * 100)}%)`;
+    circle.appendChild(title);
+    group.appendChild(circle);
+    offset += dash;
+  });
+
+  const totalText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  totalText.setAttribute('x', cx); totalText.setAttribute('y', cy - 6);
+  totalText.setAttribute('text-anchor', 'middle'); totalText.setAttribute('class', 'donut-total');
+  totalText.textContent = total >= 1000 ? (total / 1000).toFixed(1) + 'k' : total;
+  svg.appendChild(totalText);
+
+  const totalLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  totalLabel.setAttribute('x', cx); totalLabel.setAttribute('y', cy + 14);
+  totalLabel.setAttribute('text-anchor', 'middle'); totalLabel.setAttribute('class', 'donut-total-label');
+  totalLabel.textContent = 'تحميل';
+  svg.appendChild(totalLabel);
+
+  slices.forEach((p, i) => {
+    const pct = Math.round((p.count / total) * 100);
+    const color = p.platform === 'أخرى' ? 'var(--donut-other)' : DONUT_COLORS[i % DONUT_COLORS.length];
     const row = document.createElement('div');
-    row.className = 'platform-row';
-    const pct = (p.count / max) * 100;
+    row.className = 'legend-item';
     row.innerHTML = `
-      <span class="platform-name">${escapeHtml(p.platform)}</span>
-      <span class="platform-track"><span class="platform-fill" style="width:${pct}%"></span></span>
-      <span class="platform-count">${p.count}</span>
+      <span class="legend-dot" style="background:${color}"></span>
+      <span class="legend-name">${escapeHtml(p.platform)}</span>
+      <span class="legend-count">${p.count}</span>
+      <span class="legend-pct">${pct}%</span>
     `;
-    container.appendChild(row);
+    legend.appendChild(row);
   });
 }
 
+/* ---------- Line chart ---------- */
+function renderLineChart(daily) {
+  const svg = document.getElementById('lineChart');
+  const tooltip = document.getElementById('tooltip');
+  svg.innerHTML = '';
+  if (!daily.length) return;
+
+  const W = 480, H = 140, padX = 8, padTop = 14, padBottom = 26;
+  const max = Math.max(1, ...daily.map(d => d.count));
+  const step = (W - padX * 2) / Math.max(1, daily.length - 1);
+  const points = daily.map((d, i) => {
+    const x = padX + i * step;
+    const y = padTop + (1 - d.count / max) * (H - padTop - padBottom);
+    return { x, y, d };
+  });
+
+  const areaPath = `M ${points[0].x} ${H - padBottom} ` +
+    points.map(p => `L ${p.x} ${p.y}`).join(' ') +
+    ` L ${points[points.length - 1].x} ${H - padBottom} Z`;
+  const area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  area.setAttribute('d', areaPath);
+  area.setAttribute('fill', 'var(--accent)');
+  area.setAttribute('opacity', '0.14');
+  svg.appendChild(area);
+
+  const linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + ` ${p.x} ${p.y}`).join(' ');
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  line.setAttribute('d', linePath);
+  line.setAttribute('fill', 'none');
+  line.setAttribute('stroke', 'var(--accent)');
+  line.setAttribute('stroke-width', '2.5');
+  line.setAttribute('stroke-linecap', 'round');
+  line.setAttribute('stroke-linejoin', 'round');
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!reduceMotion) {
+    const approxLen = points.reduce((sum, p, i) => i === 0 ? 0 : sum + Math.hypot(p.x - points[i - 1].x, p.y - points[i - 1].y), 0);
+    line.style.setProperty('--len', approxLen);
+    line.style.strokeDasharray = String(approxLen);
+    line.classList.add('line-path');
+  }
+  svg.appendChild(line);
+
+  const labelEvery = daily.length > 10 ? 2 : 1;
+  points.forEach((p, i) => {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'line-point');
+    g.setAttribute('tabindex', '0');
+
+    const hit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    hit.setAttribute('class', 'hit');
+    hit.setAttribute('cx', p.x); hit.setAttribute('cy', p.y); hit.setAttribute('r', '14');
+    g.appendChild(hit);
+
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', p.x); dot.setAttribute('cy', p.y); dot.setAttribute('r', '3');
+    dot.setAttribute('fill', 'var(--bg)');
+    dot.setAttribute('stroke', 'var(--accent)');
+    dot.setAttribute('stroke-width', '2');
+    g.appendChild(dot);
+
+    const show = e => {
+      tooltip.innerHTML = `<span class="v">${p.d.count}</span> <span class="d">— ${p.d.day}</span>`;
+      tooltip.style.display = 'block';
+      const rect = (e.currentTarget.querySelector('.hit')).getBoundingClientRect();
+      tooltip.style.left = (rect.left + rect.width / 2 - tooltip.offsetWidth / 2) + 'px';
+      tooltip.style.top = (rect.top - 40) + 'px';
+    };
+    const hide = () => { tooltip.style.display = 'none'; };
+    g.addEventListener('pointerdown', show);
+    g.addEventListener('pointerup', () => setTimeout(hide, 1200));
+    g.addEventListener('mouseenter', show);
+    g.addEventListener('mouseleave', hide);
+    g.addEventListener('focus', show);
+    g.addEventListener('blur', hide);
+    svg.appendChild(g);
+
+    if (i % labelEvery === 0) {
+      const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      lbl.setAttribute('x', p.x); lbl.setAttribute('y', H - 6);
+      lbl.setAttribute('text-anchor', 'middle');
+      lbl.setAttribute('class', 'line-axis-label');
+      lbl.textContent = p.d.day.slice(5).replace('-', '/');
+      svg.appendChild(lbl);
+    }
+  });
+}
+
+/* ---------- Requests: filter/sort/render ---------- */
 function applyFiltersAndSort() {
   const q = document.getElementById('search').value.trim().toLowerCase();
   let rows = allRows.filter(r => {
@@ -1057,44 +1422,76 @@ function applyFiltersAndSort() {
     }
     return true;
   });
+
+  const [key, dir] = sortValue === 'timestamp_desc' ? ['timestamp', -1]
+    : sortValue === 'timestamp_asc' ? ['timestamp', 1]
+    : sortValue === 'status' ? ['status', 1]
+    : ['platform', 1];
   rows.sort((a, b) => {
-    const av = (a[sortKey] || '').toString();
-    const bv = (b[sortKey] || '').toString();
-    return av > bv ? sortDir : av < bv ? -sortDir : 0;
+    const av = (a[key] || '').toString();
+    const bv = (b[key] || '').toString();
+    return av > bv ? dir : av < bv ? -dir : 0;
   });
-  renderTable(rows);
+
+  renderRequestList(rows);
 }
 
-function renderTable(rows) {
-  const tbody = document.getElementById('tableBody');
-  tbody.innerHTML = '';
+function renderRequestList(rows) {
+  const list = document.getElementById('requestList');
+  list.innerHTML = '';
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">لا توجد نتائج</td></tr>';
+    list.innerHTML = '<div class="empty-state">لا توجد نتائج</div>';
     return;
   }
+  const sourceLabel = { telegram: 'تيليجرام', web: 'الموقع' };
   rows.forEach(r => {
-    const tr = document.createElement('tr');
-    const statusLabel = r.status === 'success' ? 'نجح' : 'فشل';
-    tr.innerHTML = `
-      <td>${escapeHtml(r.timestamp)}</td>
-      <td>${escapeHtml(r.source)}</td>
-      <td>${escapeHtml(r.requester || '')}</td>
-      <td>${escapeHtml(r.platform || '')}</td>
-      <td class="url"></td>
-      <td><span class="status"><span class="status-dot ${r.status}"></span>${statusLabel}</span></td>
+    const icon = platformIcon(r.platform);
+    const isSuccess = r.status === 'success';
+    const card = document.createElement('div');
+    card.className = 'request-card';
+    card.innerHTML = `
+      <div class="request-top">
+        <span class="platform-badge">
+          <span class="platform-badge-icon" style="background:${icon.bg}">${icon.svg}</span>
+          <span class="platform-badge-name">${escapeHtml(r.platform || 'غير معروف')}</span>
+        </span>
+        <span class="status-pill ${isSuccess ? 'success' : 'failed'}">
+          ${isSuccess ? ICON_CHECK : ICON_X} ${isSuccess ? 'نجح' : 'فشل'}
+        </span>
+      </div>
+      <a class="request-url" href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(r.url)}">${escapeHtml(r.url)}</a>
+      <div class="request-meta">${escapeHtml(r.requester || '')} · #${r.id} · ${escapeHtml(r.timestamp)} · ${sourceLabel[r.source] || escapeHtml(r.source)}</div>
     `;
-    const urlCell = tr.querySelector('.url');
-    const a = document.createElement('a');
-    a.href = r.url;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    a.title = r.url;
-    a.textContent = r.url;
-    urlCell.appendChild(a);
-    tbody.appendChild(tr);
+    list.appendChild(card);
   });
 }
 
+/* ---------- Avatar dropdown ---------- */
+const avatarBtn = document.getElementById('avatarBtn');
+const avatarDropdown = document.getElementById('avatarDropdown');
+function closeAvatarMenu() {
+  avatarDropdown.hidden = true;
+  avatarBtn.setAttribute('aria-expanded', 'false');
+}
+avatarBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  const open = avatarDropdown.hidden;
+  avatarDropdown.hidden = !open;
+  avatarBtn.setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('click', e => {
+  if (!avatarDropdown.hidden && !avatarDropdown.contains(e.target) && e.target !== avatarBtn) closeAvatarMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAvatarMenu(); });
+
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  try {
+    await fetch(window.location.pathname, { headers: { Authorization: 'Basic ' + btoa('logout:logout') } });
+  } catch (e) { /* best-effort: some browsers keep Basic Auth cached regardless */ }
+  window.location.href = '/';
+});
+
+/* ---------- Load / refresh ---------- */
 async function loadData() {
   const content = document.getElementById('content');
   const hasData = allRows.length > 0;
@@ -1106,8 +1503,8 @@ async function loadData() {
     const data = await res.json();
     allRows = data.recent;
     renderStats(data);
-    renderBarChart(data.daily);
-    renderPlatforms(data.by_platform);
+    renderDonut(data.by_platform);
+    renderLineChart(data.daily);
     applyFiltersAndSort();
     document.getElementById('loading').style.display = 'none';
     content.style.display = 'block';
@@ -1123,6 +1520,7 @@ async function loadData() {
 }
 
 document.getElementById('search').addEventListener('input', applyFiltersAndSort);
+document.getElementById('sortSelect').addEventListener('change', e => { sortValue = e.target.value; applyFiltersAndSort(); });
 document.querySelectorAll('.chip').forEach(chip => {
   chip.addEventListener('click', () => {
     const group = chip.dataset.filter;
@@ -1130,13 +1528,6 @@ document.querySelectorAll('.chip').forEach(chip => {
     chip.classList.add('active');
     if (group === 'status') statusFilter = chip.dataset.value;
     if (group === 'source') sourceFilter = chip.dataset.value;
-    applyFiltersAndSort();
-  });
-});
-document.querySelectorAll('th[data-key]').forEach(th => {
-  th.addEventListener('click', () => {
-    const key = th.dataset.key;
-    if (sortKey === key) { sortDir *= -1; } else { sortKey = key; sortDir = -1; }
     applyFiltersAndSort();
   });
 });
@@ -1152,7 +1543,7 @@ setInterval(loadData, 30000);
 @app.route("/dashboard")
 @require_dashboard_auth
 def dashboard():
-    return render_template_string(DASHBOARD_TEMPLATE)
+    return render_template_string(DASHBOARD_TEMPLATE, username=DASHBOARD_USERNAME)
 
 
 def run_server():
