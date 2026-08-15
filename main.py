@@ -392,6 +392,30 @@ SNAPCHAT_SHORT_LINK_MESSAGE = (
     "افتحه بتطبيق سناب شات، انسخ الرابط الجديد اللي يطلع، وارسله لي 🙌"
 )
 
+
+def resolve_snapchat_short_link(url):
+    """Follow a snapchat.com/t/<code> share link to its real spotlight URL.
+
+    yt-dlp's Snapchat extractor only matches snapchat.com/spotlight/<id> -
+    it has no idea what to do with the short link the app's share sheet
+    actually hands out. Short links like this are almost always a plain
+    HTTP redirect (so they work when pasted into any browser, not just
+    Snapchat's own app), so following it ourselves and handing yt-dlp the
+    resolved URL should work without needing any yt-dlp-side change.
+    stream=True avoids pulling the full page body into memory - we only
+    need the final resolved URL from the redirect chain.
+    """
+    try:
+        resp = requests.get(url, allow_redirects=True, timeout=10, stream=True)
+        resp.close()
+    except requests.RequestException:
+        logger.exception("Failed to resolve Snapchat short link %s", url)
+        return None
+    if resp.url and "snapchat.com/spotlight/" in resp.url:
+        return resp.url
+    logger.info("Snapchat short link %s resolved to %s (not a spotlight URL)", url, resp.url)
+    return None
+
 MAX_FILESIZE_MESSAGE = "📀 واااو! الفيديو هذا ضخم زيادة لتيليجرام 😅\nجرّب واحد أقصر"
 
 NO_VIDEO_FOUND_MESSAGE = "🤔 ما لقيت فيديو بهذا الرابط\nمتأكد انه فيديو مو منشور نص/صورة؟"
@@ -526,8 +550,12 @@ def download(message):
         return
 
     if SNAPCHAT_SHORT_LINK_RE.search(url):
-        bot.reply_to(message, SNAPCHAT_SHORT_LINK_MESSAGE)
-        return
+        resolved = resolve_snapchat_short_link(url)
+        if resolved:
+            url = resolved
+        else:
+            bot.reply_to(message, SNAPCHAT_SHORT_LINK_MESSAGE)
+            return
 
     bot.reply_to(message, random.choice(DOWNLOADING_MESSAGES))
     filename = None
@@ -615,6 +643,13 @@ def api_download():
 
     if not url.lower().startswith(("http://", "https://")):
         return jsonify({"error": "رابط غير صالح"}), 400
+
+    if SNAPCHAT_SHORT_LINK_RE.search(url):
+        resolved = resolve_snapchat_short_link(url)
+        if resolved:
+            url = resolved
+        else:
+            return jsonify({"error": "رابط سناب شات مختصر - افتحه بالتطبيق وانسخ الرابط الجديد"}), 400
 
     try:
         ydl_opts = {
