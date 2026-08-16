@@ -393,6 +393,12 @@ SNAPCHAT_SHORT_LINK_MESSAGE = (
 )
 
 
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+)
+
+
 def resolve_snapchat_short_link(url):
     """Follow a snapchat.com/t/<code> share link to its real spotlight URL.
 
@@ -402,18 +408,33 @@ def resolve_snapchat_short_link(url):
     HTTP redirect (so they work when pasted into any browser, not just
     Snapchat's own app), so following it ourselves and handing yt-dlp the
     resolved URL should work without needing any yt-dlp-side change.
+
+    Confirmed live (Render logs): with the default python-requests User-
+    Agent, the redirect target came back malformed (a stray ":443" landed
+    in the URL *path* - "https://www.snapchat.com/:443/t/<code>", not a
+    real page). That's the same "different response for a client that
+    doesn't look like a browser" pattern seen with YouTube/Twitter earlier,
+    so send a real mobile Safari UA instead of Python's default.
+
     stream=True avoids pulling the full page body into memory - we only
     need the final resolved URL from the redirect chain.
     """
     try:
-        resp = requests.get(url, allow_redirects=True, timeout=10, stream=True)
+        resp = requests.get(
+            url, allow_redirects=True, timeout=10, stream=True,
+            headers={"User-Agent": _BROWSER_USER_AGENT},
+        )
         resp.close()
     except requests.RequestException:
         logger.exception("Failed to resolve Snapchat short link %s", url)
         return None
     if resp.url and "snapchat.com/spotlight/" in resp.url:
         return resp.url
-    logger.info("Snapchat short link %s resolved to %s (not a spotlight URL)", url, resp.url)
+    hop_codes = [hop.status_code for hop in resp.history] + [resp.status_code]
+    logger.info(
+        "Snapchat short link %s resolved to %s (not a spotlight URL, redirect chain status codes: %s)",
+        url, resp.url, hop_codes,
+    )
     return None
 
 MAX_FILESIZE_MESSAGE = "📀 واااو! الفيديو هذا ضخم زيادة لتيليجرام 😅\nجرّب واحد أقصر"
