@@ -398,6 +398,13 @@ _BROWSER_USER_AGENT = (
     "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 )
 
+# Confirmed live: the resolved link comes back as
+# snapchat.com/@<username>/spotlight/<id>?<tracking params>, but yt-dlp's
+# SnapchatSpotlightIE only matches snapchat.com/spotlight/<id> with nothing
+# between the domain and "spotlight/". Pull just the id back out and
+# rebuild the plain URL yt-dlp actually recognizes.
+_SNAPCHAT_SPOTLIGHT_ID_RE = re.compile(r"spotlight/(\w+)")
+
 
 def resolve_snapchat_short_link(url):
     """Follow a snapchat.com/t/<code> share link to its real spotlight URL.
@@ -428,8 +435,10 @@ def resolve_snapchat_short_link(url):
     except requests.RequestException:
         logger.exception("Failed to resolve Snapchat short link %s", url)
         return None
-    if resp.url and "snapchat.com/spotlight/" in resp.url:
-        return resp.url
+    if resp.url and "snapchat.com" in resp.url:
+        m = _SNAPCHAT_SPOTLIGHT_ID_RE.search(resp.url)
+        if m:
+            return f"https://www.snapchat.com/spotlight/{m.group(1)}"
     hop_codes = [hop.status_code for hop in resp.history] + [resp.status_code]
     logger.info(
         "Snapchat short link %s resolved to %s (not a spotlight URL, redirect chain status codes: %s)",
