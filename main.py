@@ -435,16 +435,24 @@ def resolve_snapchat_short_link(url):
     except requests.RequestException:
         logger.exception("Failed to resolve Snapchat short link %s", url)
         return None
-    if resp.url and "snapchat.com" in resp.url:
-        m = _SNAPCHAT_SPOTLIGHT_ID_RE.search(resp.url)
-        if m:
-            return f"https://www.snapchat.com/spotlight/{m.group(1)}"
-    hop_codes = [hop.status_code for hop in resp.history] + [resp.status_code]
-    logger.info(
-        "Snapchat short link %s resolved to %s (not a spotlight URL, redirect chain status codes: %s)",
-        url, resp.url, hop_codes,
-    )
-    return None
+    if not resp.url or "snapchat.com" not in resp.url:
+        hop_codes = [hop.status_code for hop in resp.history] + [resp.status_code]
+        logger.info(
+            "Snapchat short link %s resolved to %s (not a snapchat.com URL, redirect chain status codes: %s)",
+            url, resp.url, hop_codes,
+        )
+        return None
+    m = _SNAPCHAT_SPOTLIGHT_ID_RE.search(resp.url)
+    if m:
+        return f"https://www.snapchat.com/spotlight/{m.group(1)}"
+    # Not a Spotlight link - most likely a Story/Snap share (yt-dlp has no
+    # dedicated extractor for those, only Spotlight). Hand yt-dlp the
+    # resolved page anyway: its generic extractor can sometimes pull a
+    # video straight from an Open Graph video tag even without a
+    # site-specific extractor. Worst case it fails the same way an
+    # unsupported URL always does, handled by the existing error messages.
+    logger.info("Snapchat short link %s resolved to %s (not Spotlight, trying generic extraction)", url, resp.url)
+    return resp.url
 
 MAX_FILESIZE_MESSAGE = "📀 واااو! الفيديو هذا ضخم زيادة لتيليجرام 😅\nجرّب واحد أقصر"
 
