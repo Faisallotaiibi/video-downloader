@@ -584,6 +584,41 @@ def extract_info_with_retry(ydl_opts, url, download):
             delay *= 2
 
 
+def select_downloaded_file(ydl, info):
+    """Return the filepath of the actual video, deleting any other files.
+
+    Normally info describes exactly one downloaded file and
+    ydl.prepare_filename(info) is enough. But yt-dlp's generic extractor
+    (the only thing that can pull anything at all out of a Snapchat Story
+    share, since there's no dedicated extractor for those) sometimes
+    returns a synthetic multi-entry "playlist" instead of one video -
+    confirmed live: a Story share downloaded 4 entries, 3 tiny ~300KB
+    preview-thumbnail images plus one real 2.29MB .mp4. noplaylist=True
+    doesn't stop this since it's not a real playlist-vs-single-video
+    yt-dlp is resolving, just multiple candidate media items the generic
+    extractor found on one page. Pick the entry that actually has a video
+    stream (largest, if more than one does) and clean up the rest so they
+    don't linger on Render's disk.
+    """
+    entries = info.get('entries')
+    if entries is None:
+        return ydl.prepare_filename(info)
+
+    entries = [e for e in entries if e]
+    video_entries = [e for e in entries if e.get('vcodec') not in (None, 'none')]
+    chosen = max(
+        video_entries or entries,
+        key=lambda e: e.get('filesize') or e.get('filesize_approx') or 0,
+    )
+    for entry in entries:
+        if entry is chosen:
+            continue
+        leftover = ydl.prepare_filename(entry)
+        if os.path.exists(leftover):
+            os.remove(leftover)
+    return ydl.prepare_filename(chosen)
+
+
 def keep_alive():
     while True:
         try:
@@ -644,7 +679,7 @@ def download(message):
             **cookie_opts_for(url),
         }
         ydl, info = extract_info_with_retry(ydl_opts, url, download=True)
-        filename = ydl.prepare_filename(info)
+        filename = select_downloaded_file(ydl, info)
 
         if not os.path.exists(filename):
             raise FileNotFoundError("الملف أكبر من 50MB")
