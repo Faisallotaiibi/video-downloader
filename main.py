@@ -181,6 +181,30 @@ def cookie_opts_for(url):
 # binary bundled by imageio-ffmpeg instead.
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 
+try:
+    from yt_dlp.utils._utils import _UnsafeExtensionError
+    # Snapchat's CDN suffixes media URLs with things like ".256.IRZXSOY"
+    # (confirmed in yt-dlp's own SnapchatSpotlightIE test fixtures) - not a
+    # real file extension, but yt-dlp's generic extractor (the only thing
+    # that can find a Story-share's media URL at all, since there's no
+    # dedicated Snapchat Story extractor) guesses the extension from the
+    # URL and refuses anything that doesn't look like a known media
+    # extension, as a safety measure. Confirmed live (Render logs):
+    # "The extracted extension ('IRZXSOY') is unusual and will be skipped
+    # for safety reasons." This is yt-dlp's own documented
+    # `--compat-options allow-unsafe-ext` escape hatch - that flag is
+    # CLI-only, so toggle the same internal switch it uses directly here.
+    # Safe for us specifically because every downloaded file still has to
+    # pass probe_video_metadata()/ensure_playable()'s real ffmpeg-based
+    # validation before it's ever sent to a user - nothing is executed,
+    # only parsed as media.
+    _UnsafeExtensionError._enabled = False
+except ImportError:
+    logger.warning(
+        "Could not disable yt-dlp's unsafe-extension check (internal API "
+        "changed?) - some Snapchat Story shares may still fail"
+    )
+
 _DURATION_RE = re.compile(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
 _DIMENSIONS_RE = re.compile(r'Video:.*?(\d{2,5})x(\d{2,5})')
 _VCODEC_RE = re.compile(r'Video:\s*(\w+)')
