@@ -4,3 +4,10 @@ requests
 flask
 imageio-ffmpeg
 libsql-client
+# yt-dlp needs this to impersonate a real browser's TLS fingerprint for
+# sites (TikTok confirmed) that block non-browser clients regardless of
+# cookies. Version-capped because the installed yt-dlp release only
+# supports curl_cffi 0.5.10 or 0.10.x-0.15.x - a newer curl_cffi (0.16+)
+# silently drops to zero available impersonation targets instead of
+# erroring, so pin instead of leaving this to chance on every build.
+curl_cffi>=0.10,<0.16
