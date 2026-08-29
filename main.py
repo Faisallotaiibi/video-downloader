@@ -504,6 +504,18 @@ bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__, static_folder=".")
 
 
+USAGE_LOG_EXTRA_COLUMNS = {
+    "telegram_id": "INTEGER",
+    "last_name": "TEXT",
+    "language_code": "TEXT",
+    "is_premium": "INTEGER",
+    "chat_type": "TEXT",
+    "user_agent": "TEXT",
+    "geo_country": "TEXT",
+    "geo_city": "TEXT",
+}
+
+
 def init_db():
     db_execute(
         """
@@ -519,6 +531,15 @@ def init_db():
         )
         """
     )
+    # ALTER TABLE ADD COLUMN has no IF NOT EXISTS, and db_execute/db_query
+    # treat any exception as "Turso is broken" and permanently fall back to
+    # local storage for the rest of the process - so check what's already
+    # there first instead of letting a routine "duplicate column" error on
+    # every restart silently disable persistent storage.
+    existing = {row["name"] for row in db_query("PRAGMA table_info(usage_log)")}
+    for name, col_type in USAGE_LOG_EXTRA_COLUMNS.items():
+        if name not in existing:
+            db_execute(f"ALTER TABLE usage_log ADD COLUMN {name} {col_type}")
 
 
 def detect_platform(url):
@@ -534,11 +555,16 @@ def detect_platform(url):
     return host or "غير معروف"
 
 
-def log_usage(source, requester, url, status, error=None):
+def log_usage(
+    source, requester, url, status, error=None, *,
+    telegram_id=None, last_name=None, language_code=None, is_premium=None,
+    chat_type=None, user_agent=None, geo_country=None, geo_city=None,
+):
     try:
         db_execute(
-            "INSERT INTO usage_log (timestamp, source, requester, url, platform, status, error) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO usage_log (timestamp, source, requester, url, platform, status, error, "
+            "telegram_id, last_name, language_code, is_premium, chat_type, user_agent, geo_country, geo_city) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 source,
@@ -547,10 +573,37 @@ def log_usage(source, requester, url, status, error=None):
                 detect_platform(url),
                 status,
                 error,
+                telegram_id,
+                last_name,
+                language_code,
+                None if is_premium is None else int(bool(is_premium)),
+                chat_type,
+                user_agent,
+                geo_country,
+                geo_city,
             ),
         )
     except Exception:
         logger.exception("Failed to log usage")
+
+
+def lookup_geo(ip):
+    """Best-effort country/city for a web downloader visitor's IP.
+
+    Telegram never gives a bot the user's real IP, so this only ever runs
+    for web-sourced requests. ip-api.com's free tier needs no API key;
+    failures (private/local IP, network error, rate limit) are silent and
+    just leave the fields empty - this is supplementary info, never worth
+    delaying or breaking an actual download over.
+    """
+    try:
+        resp = requests.get(
+            f"http://ip-api.com/json/{ip}", params={"fields": "country,city"}, timeout=3,
+        )
+        data = resp.json()
+        return data.get("country"), data.get("city")
+    except Exception:
+        return None, None
 
 
 # Instagram throttles anonymous/burst traffic with errors that clear up on
@@ -641,6 +694,13 @@ def download(message):
     requester = f"@{message.from_user.username}" if message.from_user.username else (
         message.from_user.first_name or str(message.chat.id)
     )
+    telegram_extra = dict(
+        telegram_id=message.from_user.id,
+        last_name=message.from_user.last_name,
+        language_code=message.from_user.language_code,
+        is_premium=getattr(message.from_user, 'is_premium', None),
+        chat_type=message.chat.type,
+    )
 
     if not url.lower().startswith(("http://", "https://")):
         bot.reply_to(message, NOT_A_URL_MESSAGE)
@@ -717,11 +777,11 @@ def download(message):
                 height=height,
                 supports_streaming=True,
             )
-        log_usage("telegram", requester, url, "success")
+        log_usage("telegram", requester, url, "success", **telegram_extra)
     except Exception as e:
         logger.exception("Download failed for url=%s", url)
         bot.reply_to(message, friendly_error_message(url, str(e)))
-        log_usage("telegram", requester, url, "failed", str(e))
+        log_usage("telegram", requester, url, "failed", str(e), **telegram_extra)
     finally:
         if filename and os.path.exists(filename):
             os.remove(filename)
@@ -748,6 +808,13 @@ def api_download():
         else:
             return jsonify({"error": "رابط سناب شات مختصر - افتحه بالتطبيق وانسخ الرابط الجديد"}), 400
 
+    geo_country, geo_city = lookup_geo(requester)
+    web_extra = dict(
+        user_agent=request.headers.get("User-Agent"),
+        geo_country=geo_country,
+        geo_city=geo_city,
+    )
+
     try:
         ydl_opts = {
             'format': 'best[ext=mp4]/best',
@@ -766,14 +833,14 @@ def api_download():
             direct_url = info["formats"][-1].get("url")
 
         if not direct_url:
-            log_usage("web", requester, url, "failed", "no direct url found")
+            log_usage("web", requester, url, "failed", "no direct url found", **web_extra)
             return jsonify({"error": "تعذر العثور على رابط التحميل"}), 502
 
-        log_usage("web", requester, url, "success")
+        log_usage("web", requester, url, "success", **web_extra)
         return jsonify({"download_url": direct_url})
     except Exception as e:
         logger.exception("API download failed for url=%s", url)
-        log_usage("web", requester, url, "failed", str(e))
+        log_usage("web", requester, url, "failed", str(e), **web_extra)
         return jsonify({"error": str(e)}), 500
 
 
@@ -841,6 +908,48 @@ def api_dashboard_data():
     return jsonify(dashboard_data())
 
 
+def build_user_profile(rows):
+    """Extra per-user info shown only in the users-section drill-down.
+
+    Computed entirely from the same rows already fetched for the request
+    list (no extra query). Per-request fields (Telegram id, language,
+    etc.) come from the most recent row; the rest are aggregated across
+    up to the 500 fetched rows - true "first ever" use could be older
+    than that for a very heavy user, same limit the request list itself
+    already has.
+    """
+    if not rows:
+        return None
+    latest = rows[0]  # rows are ORDER BY id DESC
+    total = len(rows)
+    success = sum(1 for r in rows if r.get("status") == "success")
+    platform_counts, hour_counts = {}, {}
+    for r in rows:
+        platform = r.get("platform")
+        if platform:
+            platform_counts[platform] = platform_counts.get(platform, 0) + 1
+        try:
+            hour = datetime.fromisoformat(r["timestamp"]).hour
+        except (ValueError, TypeError, KeyError):
+            continue
+        hour_counts[hour] = hour_counts.get(hour, 0) + 1
+
+    return {
+        "telegram_id": latest.get("telegram_id"),
+        "last_name": latest.get("last_name"),
+        "language_code": latest.get("language_code"),
+        "is_premium": latest.get("is_premium"),
+        "chat_type": latest.get("chat_type"),
+        "user_agent": latest.get("user_agent"),
+        "geo_country": latest.get("geo_country"),
+        "geo_city": latest.get("geo_city"),
+        "first_seen": min(r["timestamp"] for r in rows),
+        "top_platform": max(platform_counts, key=platform_counts.get) if platform_counts else None,
+        "success_rate": round(success / total * 100, 1),
+        "peak_hour": max(hour_counts, key=hour_counts.get) if hour_counts else None,
+    }
+
+
 @app.route("/api/dashboard-data/user-requests")
 @require_dashboard_auth
 def api_user_requests():
@@ -851,7 +960,7 @@ def api_user_requests():
         "SELECT * FROM usage_log WHERE requester = ? ORDER BY id DESC LIMIT 500",
         (requester,),
     )
-    return jsonify({"requester": requester, "requests": rows})
+    return jsonify({"requester": requester, "requests": rows, "profile": build_user_profile(rows)})
 
 
 REPORT_RANGE_HOURS = {"1h": 1, "12h": 12, "1d": 24, "7d": 24 * 7, "30d": 24 * 30}
@@ -1387,6 +1496,28 @@ main { padding-top: 18px; }
 .sheet-body { overflow-y: auto; padding: 14px 16px; }
 .sheet-body .request-list { gap: 10px; }
 
+/* ---------- User profile (extra info, users-drilldown only) ---------- */
+.profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.profile-item {
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.profile-label { font-size: 10.5px; color: var(--text-muted); font-weight: 700; }
+.profile-value { font-size: 13px; color: var(--text-primary); font-weight: 800; direction: ltr; text-align: right; unicode-bidi: plaintext; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 @media (min-width: 480px) {
   .stats-scroll { flex-wrap: wrap; }
   .mini-card { flex: 1 1 0; }
@@ -1548,6 +1679,7 @@ main { padding-top: 18px; }
       </button>
     </div>
     <div class="sheet-body">
+      <div class="profile-grid" id="userProfile" hidden></div>
       <div class="request-list" id="sheetRequestList"></div>
     </div>
   </div>
@@ -1866,12 +1998,56 @@ function renderUsers(users) {
 const sheetOverlay = document.getElementById('sheetOverlay');
 let lastFocusedBeforeSheet = null;
 
+function formatHour(h) {
+  if (h === null || h === undefined) return null;
+  const period = h < 12 ? 'ص' : 'م';
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12} ${period}`;
+}
+
+function renderUserProfile(profile) {
+  const el = document.getElementById('userProfile');
+  if (!profile) {
+    el.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  const items = [
+    ['أول استخدام', profile.first_seen],
+    ['المنصة المفضلة', profile.top_platform],
+    ['معدل النجاح', profile.success_rate != null ? `${profile.success_rate}%` : null],
+    ['وقت الذروة', formatHour(profile.peak_hour)],
+    ['معرف تيليجرام', profile.telegram_id],
+    ['الاسم الأخير', profile.last_name],
+    ['لغة التطبيق', profile.language_code],
+    ['Telegram Premium', profile.is_premium != null ? (profile.is_premium ? 'نعم' : 'لا') : null],
+    ['نوع المحادثة', profile.chat_type],
+    ['الجهاز/المتصفح', profile.user_agent],
+    ['الموقع الجغرافي', [profile.geo_city, profile.geo_country].filter(Boolean).join('، ') || null],
+  ].filter(([, value]) => value !== null && value !== undefined && value !== '');
+
+  if (items.length === 0) {
+    el.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = items.map(([label, value]) => `
+    <div class="profile-item">
+      <span class="profile-label">${escapeHtml(label)}</span>
+      <span class="profile-value" title="${escapeHtml(String(value))}">${escapeHtml(String(value))}</span>
+    </div>
+  `).join('');
+  el.hidden = false;
+}
+
 async function openUserSheet(requester, count) {
   lastFocusedBeforeSheet = document.activeElement;
   document.getElementById('sheetUserName').textContent = requester;
   document.getElementById('sheetUserCount').textContent = `${count} طلب تحميل`;
   const body = document.getElementById('sheetRequestList');
   body.innerHTML = '<div class="empty-state">جاري التحميل...</div>';
+  renderUserProfile(null);
   sheetOverlay.hidden = false;
   document.getElementById('sheetClose').focus();
 
@@ -1879,6 +2055,7 @@ async function openUserSheet(requester, count) {
     const res = await fetch(`/api/dashboard-data/user-requests?name=${encodeURIComponent(requester)}`);
     if (!res.ok) throw new Error('request failed');
     const data = await res.json();
+    renderUserProfile(data.profile);
     body.innerHTML = data.requests.length
       ? data.requests.map(requestCardHTML).join('')
       : '<div class="empty-state">لا توجد طلبات</div>';
@@ -1944,6 +2121,7 @@ async function loadReport(range) {
 
 function openLinkSheet(item) {
   lastFocusedBeforeSheet = document.activeElement;
+  renderUserProfile(null);
   document.getElementById('sheetUserName').textContent = item.url;
   document.getElementById('sheetUserCount').textContent = `${item.downloads} تحميل · ${item.unique_users} مستخدم`;
   const openLink = `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" class="request-url" style="margin-bottom:14px;display:block">${escapeHtml(item.url)}</a>`;
