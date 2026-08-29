@@ -854,6 +854,44 @@ def api_user_requests():
     return jsonify({"requester": requester, "requests": rows})
 
 
+REPORT_RANGE_HOURS = {"1h": 1, "12h": 12, "1d": 24, "7d": 24 * 7, "30d": 24 * 30}
+
+
+@app.route("/api/dashboard-data/report")
+@require_dashboard_auth
+def api_report():
+    range_key = request.args.get("range", "1d")
+    hours = REPORT_RANGE_HOURS.get(range_key)
+    if hours is None:
+        return jsonify({"error": "invalid range"}), 400
+
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+
+    top_links = db_query(
+        "SELECT url, platform, COUNT(*) AS downloads, COUNT(DISTINCT requester) AS unique_users "
+        "FROM usage_log WHERE status = 'success' AND timestamp >= ? "
+        "GROUP BY url ORDER BY downloads DESC LIMIT 10",
+        (since,),
+    )
+
+    report = []
+    for row in top_links:
+        requesters = db_query(
+            "SELECT requester, source, timestamp FROM usage_log "
+            "WHERE url = ? AND status = 'success' AND timestamp >= ? ORDER BY id DESC",
+            (row["url"], since),
+        )
+        report.append({
+            "url": row["url"],
+            "platform": row["platform"],
+            "downloads": row["downloads"],
+            "unique_users": row["unique_users"],
+            "requesters": requesters,
+        })
+
+    return jsonify({"range": range_key, "report": report})
+
+
 DASHBOARD_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -1255,6 +1293,54 @@ main { padding-top: 18px; }
 .user-count { font-size: 12px; font-weight: 800; color: var(--text-secondary); background: var(--surface-2); padding: 3px 9px; border-radius: 20px; flex-shrink: 0; }
 .user-chevron { flex-shrink: 0; color: var(--text-muted); display: flex; }
 
+/* ---------- Link report ---------- */
+.report-body { margin-top: 14px; }
+.report-btn {
+  width: 100%;
+  min-height: 44px;
+  margin: 12px 0;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #020617;
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+}
+.report-btn:hover, .report-btn:focus-visible { filter: brightness(1.1); outline: 2px solid var(--accent); outline-offset: 2px; }
+.report-btn:disabled { opacity: 0.6; cursor: default; }
+.report-list { display: flex; flex-direction: column; gap: 2px; }
+.report-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 9px 6px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: right;
+}
+.report-row:last-child { border-bottom: none; }
+.report-row:hover, .report-row:focus-visible { background: var(--surface-2); outline: none; }
+.report-rank {
+  flex-shrink: 0;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+.report-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.report-url { font-size: 12.5px; font-weight: 700; color: var(--accent); direction: ltr; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: plaintext; }
+.report-meta { font-size: 11px; color: var(--text-muted); }
+
 /* ---------- User sheet (drill-down) ---------- */
 .sheet-overlay {
   position: fixed; inset: 0;
@@ -1389,6 +1475,26 @@ main { padding-top: 18px; }
           </span>
         </summary>
         <div class="users-list" id="usersList"></div>
+      </details>
+
+      <details class="card users-card">
+        <summary class="users-summary">
+          <h2>تقرير الروابط الأكثر تحميلًا</h2>
+          <span class="users-summary-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+        </summary>
+        <div class="report-body">
+          <div class="chip-row">
+            <span class="chip report-chip" data-range="1h">ساعة</span>
+            <span class="chip report-chip" data-range="12h">١٢ ساعة</span>
+            <span class="chip report-chip active" data-range="1d">يوم</span>
+            <span class="chip report-chip" data-range="7d">أسبوع</span>
+            <span class="chip report-chip" data-range="30d">شهر</span>
+          </div>
+          <button type="button" class="report-btn" id="reportBtn">توليد التقرير</button>
+          <div class="report-list" id="reportList"></div>
+        </div>
       </details>
 
       <div class="card">
@@ -1785,6 +1891,82 @@ function closeUserSheet() {
   sheetOverlay.hidden = true;
   if (lastFocusedBeforeSheet) lastFocusedBeforeSheet.focus();
 }
+
+/* ---------- Link report ---------- */
+let lastReportData = [];
+
+function reportRowHTML(item, rank) {
+  const icon = platformIcon(item.platform);
+  return `
+    <button type="button" class="report-row" data-index="${rank - 1}">
+      <span class="report-rank">${rank}</span>
+      <span class="platform-badge-icon" style="background:${icon.bg}">${icon.svg}</span>
+      <span class="report-info">
+        <span class="report-url">${escapeHtml(item.url)}</span>
+        <span class="report-meta">${item.downloads} تحميل · ${item.unique_users} مستخدم</span>
+      </span>
+      <span class="user-chevron" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></span>
+    </button>
+  `;
+}
+
+function renderReport(report) {
+  const list = document.getElementById('reportList');
+  if (!report || report.length === 0) {
+    list.innerHTML = '<div class="empty-state">ما فيه تحميلات ناجحة بهذي المدة</div>';
+    return;
+  }
+  list.innerHTML = report.map((item, i) => reportRowHTML(item, i + 1)).join('');
+  list.querySelectorAll('.report-row').forEach(btn => {
+    btn.addEventListener('click', () => openLinkSheet(lastReportData[Number(btn.dataset.index)]));
+  });
+}
+
+async function loadReport(range) {
+  const btn = document.getElementById('reportBtn');
+  const list = document.getElementById('reportList');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'جاري التحميل...';
+  try {
+    const res = await fetch(`/api/dashboard-data/report?range=${encodeURIComponent(range)}`);
+    if (!res.ok) throw new Error('request failed');
+    const data = await res.json();
+    lastReportData = data.report;
+    renderReport(lastReportData);
+  } catch (e) {
+    list.innerHTML = '<div class="empty-state">تعذر تحميل التقرير</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function openLinkSheet(item) {
+  lastFocusedBeforeSheet = document.activeElement;
+  document.getElementById('sheetUserName').textContent = item.url;
+  document.getElementById('sheetUserCount').textContent = `${item.downloads} تحميل · ${item.unique_users} مستخدم`;
+  const openLink = `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" class="request-url" style="margin-bottom:14px;display:block">${escapeHtml(item.url)}</a>`;
+  const rows = item.requesters.map(r => `
+    <div class="request-card">
+      <div class="request-meta">${escapeHtml(r.requester || '')} · ${SOURCE_LABEL[r.source] || escapeHtml(r.source)} · ${escapeHtml(r.timestamp)}</div>
+    </div>
+  `).join('');
+  document.getElementById('sheetRequestList').innerHTML = openLink + rows;
+  sheetOverlay.hidden = false;
+  document.getElementById('sheetClose').focus();
+}
+
+document.querySelectorAll('.report-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.report-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+  });
+});
+document.getElementById('reportBtn').addEventListener('click', () => {
+  const active = document.querySelector('.report-chip.active');
+  loadReport(active ? active.dataset.range : '1d');
+});
 
 document.getElementById('sheetClose').addEventListener('click', closeUserSheet);
 sheetOverlay.addEventListener('click', e => { if (e.target === sheetOverlay) closeUserSheet(); });
