@@ -675,10 +675,11 @@ def select_downloaded_file(ydl, info):
 def keep_alive():
     while True:
         try:
-            requests.get(SELF_URL, timeout=10)
-        except requests.RequestException:
+            resp = requests.get(SELF_URL, timeout=30)
+            logger.info("keep_alive ping ok: status=%s", resp.status_code)
+        except Exception:
             logger.warning("keep_alive ping failed", exc_info=True)
-        time.sleep(840)
+        time.sleep(600)
 
 
 @bot.message_handler(commands=['start'])
