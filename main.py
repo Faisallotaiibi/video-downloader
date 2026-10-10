@@ -792,6 +792,15 @@ def index():
     return send_from_directory(".", "index.html")
 
 
+@app.route("/dashboard-icon/<name>.png")
+def dashboard_icon(name):
+    # Public on purpose: iOS fetches the home-screen icon without the
+    # dashboard's Basic-auth credentials. Only these fixed names are served.
+    if name not in ("apple-touch-icon", "icon-192", "favicon-32"):
+        return Response(status=404)
+    return send_from_directory("icons", f"dashboard-{name}.png", max_age=86400)
+
+
 @app.route("/download", methods=["POST"])
 def api_download():
     data = request.get_json(silent=True) or {}
@@ -1008,6 +1017,10 @@ DASHBOARD_TEMPLATE = """
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>لوحة التحكم</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/dashboard-icon/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/dashboard-icon/icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/dashboard-icon/apple-touch-icon.png">
+<meta name="theme-color" content="#020617">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Almarai:wght@400;700;800&display=swap" rel="stylesheet">
