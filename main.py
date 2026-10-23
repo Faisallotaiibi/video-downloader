@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from urllib.parse import urlparse
@@ -495,6 +496,8 @@ def friendly_error_message(url, error_text):
         return YOUTUBE_BLOCKED_MESSAGE
     if "max_filesize" in text or "50mb" in text or "أكبر من 50" in error_text:
         return MAX_FILESIZE_MESSAGE
+    if "tiktok.com/@" in text and "/photo/" in text:
+        return "رابط تيك توك هذا لمنشور صور وليس مقطع فيديو أرسل رابط فيديو عشان أحمله لك 📹"
     if "requested format is not available" in text or "unsupported url" in text:
         return NO_VIDEO_FOUND_MESSAGE
     return GENERIC_ERROR_MESSAGE
@@ -606,32 +609,41 @@ def lookup_geo(ip):
         return None, None
 
 
-# Instagram throttles anonymous/burst traffic with errors that clear up on
-# their own a few seconds later (confirmed in yt-dlp's own instagram.py:
-# "You have exceeded the rate-limit for accessing posts anonymously" and
-# "Instagram sent an empty media response") - unlike a real 404 or a
-# too-large file, retrying the exact same request shortly after tends to
-# just work. Scoped to Instagram only via detect_platform(); every other
-# site still gets exactly one attempt, unchanged.
-INSTAGRAM_TRANSIENT_ERROR_RE = re.compile(r'rate-limit|empty media response', re.IGNORECASE)
-INSTAGRAM_RETRY_ATTEMPTS = 3
-INSTAGRAM_RETRY_DELAY = 3
+# Retry only errors that indicate a temporary network or upstream problem.
+# Deterministic failures such as unsupported URLs and restricted content should
+# return immediately instead of spending extra time repeating the same request.
+RETRYABLE_DOWNLOAD_ERROR_RE = re.compile(
+    r'rate-limit|empty media response|HTTP Error 5\d\d|HTTP 5\d\d|HTTP Error 429|'
+    r'timed? out|timeout|connection reset|connection aborted|remote end closed connection|'
+    r'server disconnected|temporarily unavailable|temporary failure',
+    re.IGNORECASE,
+)
+INVALID_COOKIE_FILE_RE = re.compile(r'does not look like a Netscape format cookies file', re.IGNORECASE)
+DOWNLOAD_RETRY_ATTEMPTS = 3
+DOWNLOAD_RETRY_DELAY = 3
 
 
 def extract_info_with_retry(ydl_opts, url, download):
-    attempts = INSTAGRAM_RETRY_ATTEMPTS if detect_platform(url) == "Instagram" else 1
-    delay = INSTAGRAM_RETRY_DELAY
-    for attempt in range(1, attempts + 1):
+    """Retry only transient network/site failures; retry without broken optional cookies."""
+    active_opts = dict(ydl_opts)
+    delay = DOWNLOAD_RETRY_DELAY
+    for attempt in range(1, DOWNLOAD_RETRY_ATTEMPTS + 1):
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(active_opts) as ydl:
                 info = ydl.extract_info(url, download=download)
                 return ydl, info
-        except yt_dlp.utils.DownloadError as e:
-            if attempt == attempts or not INSTAGRAM_TRANSIENT_ERROR_RE.search(str(e)):
+        except Exception as e:
+            error_text = str(e)
+            if "cookiefile" in active_opts and INVALID_COOKIE_FILE_RE.search(error_text):
+                active_opts.pop("cookiefile", None)
+                logger.warning("Optional cookies file is invalid; retrying without cookies")
+                if attempt < DOWNLOAD_RETRY_ATTEMPTS:
+                    continue
+            if attempt == DOWNLOAD_RETRY_ATTEMPTS or not RETRYABLE_DOWNLOAD_ERROR_RE.search(error_text):
                 raise
-            logger.info(
-                "Instagram request looked rate-limited (attempt %s/%s) for %s - retrying in %ss",
-                attempt, attempts, url, delay,
+            logger.warning(
+                "Transient %s download/extraction failure (attempt %s/%s); retrying in %ss",
+                detect_platform(url), attempt, DOWNLOAD_RETRY_ATTEMPTS, delay,
             )
             time.sleep(delay)
             delay *= 2
@@ -749,7 +761,7 @@ def download(message):
             'format': format_selector_for(url),
             'merge_output_format': 'mp4',
             'noplaylist': True,
-            'outtmpl': '/tmp/%(id)s.%(ext)s',
+            'outtmpl': f'/tmp/{uuid.uuid4().hex}.%(ext)s',
             'max_filesize': MAX_TELEGRAM_FILE_SIZE,
             'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
             'ffmpeg_location': FFMPEG_PATH,
@@ -770,7 +782,7 @@ def download(message):
         filename = select_downloaded_file(ydl, info)
 
         if not os.path.exists(filename):
-            raise FileNotFoundError("الملف أكبر من 50MB")
+            raise FileNotFoundError("Downloaded video file was not created")
 
         duration, width, height, vcodec, pix_fmt, acodec = probe_video_metadata(filename)
         if not is_stream_compatible(vcodec, pix_fmt):
@@ -804,6 +816,7 @@ def download(message):
                 width=width,
                 height=height,
                 supports_streaming=True,
+                timeout=120,
             )
         log_usage("telegram", requester, url, "success", **telegram_extra)
     except Exception as e:
