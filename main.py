@@ -609,14 +609,9 @@ def lookup_geo(ip):
         return None, None
 
 
-# Instagram throttles anonymous/burst traffic with errors that clear up on
-# their own a few seconds later (confirmed in yt-dlp's own instagram.py:
-# "You have exceeded the rate-limit for accessing posts anonymously" and
-# "Instagram sent an empty media response") - unlike a real 404 or a
-# too-large file, retrying the exact same request shortly after tends to
-# just work. Scoped to Instagram only via detect_platform(); every other
-# site still gets exactly one attempt, unchanged.
-INSTAGRAM_TRANSIENT_ERROR_RE = re.compile(r'rate-limit|empty media response', re.IGNORECASE)
+# Retry only errors that indicate a temporary network or upstream problem.
+# Deterministic failures such as unsupported URLs and restricted content should
+# return immediately instead of spending extra time repeating the same request.
 RETRYABLE_DOWNLOAD_ERROR_RE = re.compile(
     r'rate-limit|empty media response|HTTP Error 5\d\d|HTTP 5\d\d|HTTP Error 429|'
     r'timed? out|timeout|connection reset|connection aborted|remote end closed connection|'
