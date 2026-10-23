@@ -782,7 +782,7 @@ def download(message):
         filename = select_downloaded_file(ydl, info)
 
         if not os.path.exists(filename):
-            raise FileNotFoundError("الملف أكبر من 50MB")
+            raise FileNotFoundError("Downloaded video file was not created")
 
         duration, width, height, vcodec, pix_fmt, acodec = probe_video_metadata(filename)
         if not is_stream_compatible(vcodec, pix_fmt):
