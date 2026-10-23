@@ -672,6 +672,34 @@ def select_downloaded_file(ydl, info):
     return ydl.prepare_filename(chosen)
 
 
+
+def run_bot_polling():
+    """Restart polling sequentially after an escaped error or unexpected return.
+
+    Keep the same bot instance and update offset; never discard pending messages.
+    A successful long-running session resets the capped retry delay.
+    """
+    delay = 1
+    while True:
+        started = time.monotonic()
+        try:
+            bot.infinity_polling(
+                timeout=20,
+                long_polling_timeout=20,
+                skip_pending=False,
+                logger_level=logging.INFO,
+            )
+            logger.warning("Telegram polling returned unexpectedly; restarting")
+        except Exception:
+            # Do not log exception text: Telegram request URLs may contain the token.
+            logger.error("Telegram polling failed; restarting")
+        if time.monotonic() - started >= 60:
+            delay = 1
+        logger.warning("Retrying Telegram polling in %s seconds", delay)
+        time.sleep(delay)
+        delay = min(delay * 2, 60)
+
+
 def keep_alive():
     while True:
         try:
@@ -2239,5 +2267,5 @@ if __name__ == "__main__":
     init_db()
     threading.Thread(target=keep_alive, daemon=True).start()
     threading.Thread(target=run_server, daemon=True).start()
-    logger.info("Starting Telegram bot polling as @%s", bot.get_me().username)
-    bot.infinity_polling(logger_level=logging.INFO)
+    logger.info("Starting Telegram bot polling")
+    run_bot_polling()
