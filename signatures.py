@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageChops, ImageOps
 from telebot import types
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,20 @@ def process(command, timeout=180):
     return result
 
 
-def normalize_signature(source, target, ffmpeg):
+def remove_black_background(image):
+    """Explicit user opt-in for a signature flattened onto a black matte."""
+    image = image.convert('RGBA')
+    red, green, blue, alpha = image.split()
+    if alpha.getextrema()[0] < 255:
+        # Real alpha already encodes the cutout. Preserve dark logo details.
+        return image
+    brightness = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+    mask = brightness.point(lambda value: max(0, min(255, (value - 12) * 255 // 32)))
+    image.putalpha(ImageChops.multiply(alpha, mask))
+    return image
+
+
+def normalize_signature(source, target, ffmpeg, background='keep'):
     """Decode actual content; small normalized RGBA assets bound encoder memory."""
     if not 0 < os.path.getsize(source) <= SIGNATURE_LIMIT:
         raise ValueError('حجم التوقيع لازم يكون أقل من ٢ ميغابايت')
@@ -74,6 +87,8 @@ def normalize_signature(source, target, ffmpeg):
             if not getattr(image, 'is_animated', False):
                 image = ImageOps.exif_transpose(image).convert('RGBA')
                 image.thumbnail((512, 512))
+                if background == 'black':
+                    image = remove_black_background(image)
                 image.save(target + '.png')
                 return target + '.png'
             if image.n_frames > 60:
@@ -84,6 +99,8 @@ def normalize_signature(source, target, ffmpeg):
                 image.seek(index)
                 frame = image.convert('RGBA')
                 frame.thumbnail((256, 256))
+                if background == 'black':
+                    frame = remove_black_background(frame)
                 duration = max(20, image.info.get('duration', 100))
                 frames.append(frame)
                 durations.append(duration)
@@ -108,6 +125,8 @@ def normalize_signature(source, target, ffmpeg):
         with Image.open(output) as animation:
             if animation.n_frames > 60:
                 raise ValueError('ارفع توقيع GIF قصير حتى ٦ ثواني')
+        if background == 'black':
+            return normalize_signature(output, target + '-transparent', ffmpeg, background='black')
         return output
 
 
@@ -124,14 +143,19 @@ def render_signature(source, signature, output, ffmpeg, width, height,
     box_width = max(8, round(out_width * SIZES[size][1]))
     box_height = max(8, round(out_height * .20))
     margin = max(8, round(min(out_width, out_height) * .025))
-    drift = max(4, round(out_width * .035)) if moving else 0
+    drift = max(4, round(out_width * .10)) if moving else 0
+    bob = max(2, round(out_height * .025)) if moving else 0
+    travel = '(1-cos(t*1.570796))/2'
+    vertical = '(1-cos(t*2.617994))/2'
     if position == 'cc':
-        x = f'(W-w)/2+{drift}*sin(t*0.9)'
-        y = '(H-h)/2'
+        x = f'(W-w)/2+{drift}/2*sin(t*1.570796)'
+        y = f'(H-h)/2+{bob}/2*sin(t*2.617994)'
     else:
-        x = (f'W-w-{margin}-{drift}*(1+sin(t*0.9))/2' if position.endswith('r')
-             else f'{margin}+{drift}*(1+sin(t*0.9))/2')
-        y = f'H-h-{margin}' if position.startswith('b') else str(margin)
+        x = (f'W-w-{margin}-{drift}*{travel}' if position.endswith('r')
+             else f'{margin}+{drift}*{travel}')
+        y = (f'H-h-{margin}-{bob}*{vertical}' if position.startswith('b')
+             else f'{margin}+{bob}*{vertical}')
+    x, y = f'max(0,min(W-w,{x}))', f'max(0,min(H-h,{y}))'
     loop = ['-stream_loop', '-1'] if signature.endswith('.gif') else ['-loop', '1']
     graph = (
         f'[0:v]scale={out_width}:{out_height},setsar=1,fps=30[base];'
@@ -170,6 +194,9 @@ class SignatureService:
                      'user_id INTEGER PRIMARY KEY, file_id TEXT NOT NULL, '
                      "position TEXT NOT NULL DEFAULT 'br', size TEXT NOT NULL DEFAULT 'm', "
                      'moving INTEGER NOT NULL DEFAULT 1)')
+        columns = {row['name'] for row in self.query('PRAGMA table_info(user_signatures)')}
+        if 'background' not in columns:
+            self.execute("ALTER TABLE user_signatures ADD COLUMN background TEXT NOT NULL DEFAULT 'keep'")
         self.execute('CREATE TABLE IF NOT EXISTS signature_requests ('
                      'token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, '
                      'payload TEXT NOT NULL, expires REAL NOT NULL)')
@@ -192,8 +219,12 @@ class SignatureService:
         keyboard.row(button(selected('الوسط', bool(settings and settings['position'] == 'cc')), 'pos-cc'))
         keyboard.row(*(button(selected(SIZES[key][0], bool(settings and settings['size'] == key)),
                              'size-' + key) for key in SIZES))
-        movement = 'الحركة مفعلة' if settings and settings['moving'] else 'الحركة متوقفة'
-        keyboard.row(button(movement, 'motion'), button('حذف توقيعي', 'delete'))
+        keyboard.row(button(selected('متحرك', bool(settings and settings['moving'])), 'motion-on'),
+                     button(selected('ثابت', bool(settings and not settings['moving'])), 'motion-off'))
+        remove_black = bool(settings and settings.get('background') == 'black')
+        keyboard.row(button(selected('تفريغ الخلفية السوداء', remove_black), 'bg-black'),
+                     button(selected('الخلفية الأصلية', not remove_black), 'bg-keep'))
+        keyboard.row(button('حذف توقيعي', 'delete'))
         keyboard.row(button('تم', 'done'))
         return keyboard
 
@@ -202,7 +233,9 @@ class SignatureService:
             return 'ارفع توقيعك PNG أو GIF كملف بحجم أقل من ٢ ميغابايت\nتوقيع GIF يكون قصير حتى ٦ ثواني'
         return (f"توقيعك محفوظ\nالمكان {POSITIONS.get(settings['position'], 'أسفل يمين')}"
                 f"\nالحجم {SIZES.get(settings['size'], SIZES['m'])[0]}"
-                f"\nالحركة {'مفعلة' if settings['moving'] else 'ثابتة'}\n\nاضغط تم بعد اختيار إعداداتك")
+                f"\nالحركة {'مفعلة' if settings['moving'] else 'ثابتة'}"
+                f"\nالخلفية {'تفريغ الأسود' if settings.get('background') == 'black' else 'أصلية'}"
+                '\n\nاضغط تم بعد اختيار إعداداتك')
 
     def edit_panel(self, call, text, markup):
         try:
@@ -313,6 +346,12 @@ class SignatureService:
                 elif action == 'motion':
                     self.execute('UPDATE user_signatures SET moving=? WHERE user_id=?', (int(not settings['moving']), user_id))
                     text = 'حركة التوقيع ' + ('مفعلة' if not settings['moving'] else 'ثابتة')
+                elif action in ('motion-on', 'motion-off'):
+                    self.execute('UPDATE user_signatures SET moving=? WHERE user_id=?', (int(action == 'motion-on'), user_id))
+                    text = 'حركة التوقيع'
+                elif action in ('bg-black', 'bg-keep'):
+                    self.execute('UPDATE user_signatures SET background=? WHERE user_id=?', (action[3:], user_id))
+                    text = 'خلفية التوقيع'
                 else:
                     raise ValueError('خيار غير صالح')
             settings = self.settings(user_id)
@@ -412,7 +451,8 @@ class SignatureService:
             self.bot.send_message(chat_id, 'جاري إضافة توقيعك على نسخة من المقطع')
             with tempfile.TemporaryDirectory(prefix='signed-video-') as folder:
                 signature_source = self.download_telegram(settings['file_id'], os.path.join(folder, 'signature.input'), SIGNATURE_LIMIT)
-                signature = normalize_signature(signature_source, os.path.join(folder, 'mark'), self.ffmpeg)
+                signature = normalize_signature(signature_source, os.path.join(folder, 'mark'), self.ffmpeg,
+                                                 settings.get('background', 'keep'))
                 source = None
                 # getFile supports downloads up to 20 MB. Larger originals are
                 # fetched through the existing downloader, never a paid API.
@@ -431,7 +471,8 @@ class SignatureService:
                     self.bot.send_video(chat_id, video, caption='تفضل المقطع بتوقيعك',
                                         duration=payload.get('duration'), width=width, height=height,
                                         supports_streaming=True, timeout=120)
-            logger.info('Signed video delivered successfully')
+            logger.info('Signed video delivered successfully moving=%s background=%s',
+                        bool(settings['moving']), settings.get('background', 'keep'))
         except Exception as error:
             logger.warning('Signed video failed: %s', type(error).__name__)
             try:
@@ -474,9 +515,17 @@ def encoder_self_test(ffmpeg):
         gif = os.path.join(folder, 'logo.gif')
         Image.new('RGB', (120, 60), 'red').save(gif, save_all=True,
             append_images=[Image.new('RGB', (120, 60), 'green')], duration=[300, 300], loop=0)
-        for logo in (png, gif):
+        opaque = os.path.join(folder, 'black-background.png')
+        image = Image.new('RGB', (120, 60), 'black')
+        image.paste('white', (10, 10, 110, 50))
+        image.save(opaque)
+        cutout = normalize_signature(opaque, os.path.join(folder, 'cutout'), ffmpeg, 'black')
+        with Image.open(cutout) as image:
+            if image.getpixel((0, 0))[3] != 0:
+                raise ValueError('Signature cutout self-check failed')
+        for logo in (png, gif, cutout):
             output = os.path.join(folder, 'output.mp4')
             render_signature(source, logo, output, ffmpeg, 720, 1280)
             process([ffmpeg, '-v', 'error', '-i', output, '-map', '0:v:0', '-map', '0:a:0',
                      '-f', 'null', '-'], timeout=30)
-        return f'PNG+GIF audio+video OK seconds={time.monotonic() - started:.1f}'
+        return f'PNG+GIF+cutout audio+video OK seconds={time.monotonic() - started:.1f}'

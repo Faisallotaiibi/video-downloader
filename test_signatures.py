@@ -165,6 +165,40 @@ class EncoderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '٦ ثواني'):
             sig.normalize_signature(str(logo), str(self.root / 'long-normalized'), FFMPEG)
 
+    def test_black_matte_removal_is_opt_in_and_preserves_white_ink(self):
+        opaque = self.root / 'opaque.jpg'
+        image = Image.new('RGB', (120, 60), 'black')
+        ImageDraw.Draw(image).rectangle((20, 15, 100, 45), fill='white')
+        image.save(opaque)
+        keep = sig.normalize_signature(str(opaque), str(self.root / 'keep'), FFMPEG)
+        cutout = sig.normalize_signature(str(opaque), str(self.root / 'cutout'), FFMPEG, 'black')
+        with Image.open(keep) as kept, Image.open(cutout) as clean:
+            self.assertEqual(kept.getpixel((0, 0))[3], 255)
+            self.assertEqual(clean.getpixel((0, 0))[3], 0)
+            self.assertEqual(clean.getpixel((60, 30))[3], 255)
+        output = self.root / 'clean-video.mp4'
+        sig.render_signature(str(self.source), cutout, str(output), FFMPEG, 320, 240, position='tl', moving=False)
+        shot = frame(output, .2)
+        # The area that used to be a black corner is now blue video.
+        self.assertGreater(shot.getpixel((9, 9))[2], 220)
+
+    def test_genuine_alpha_preserves_black_logo_details_even_when_cutout_enabled(self):
+        image = Image.new('RGBA', (50, 50), (0, 0, 0, 0))
+        ImageDraw.Draw(image).rectangle((10, 10, 40, 40), fill=(0, 0, 0, 255))
+        cleaned = sig.remove_black_background(image)
+        self.assertEqual(cleaned.getpixel((20, 20)), (0, 0, 0, 255))
+        self.assertEqual(cleaned.getpixel((0, 0))[3], 0)
+
+    def test_moving_setting_has_visible_displacement_on_short_clip(self):
+        self.logo = self.root / 'red.png'
+        Image.new('RGBA', (120, 60), 'red').save(self.logo)
+        moving = self.render(position='tl', moving=True)
+        early = red_box(frame(moving, .1))
+        late = red_box(frame(moving, 1.3))
+        self.assertGreater(late[0] - early[0], 15)
+        still = self.render(position='tl', moving=False)
+        self.assertEqual(red_box(frame(still, .1)), red_box(frame(still, 1.3)))
+
 
 class ServiceTests(unittest.TestCase):
     def setUp(self):
@@ -301,7 +335,7 @@ class ServiceTests(unittest.TestCase):
         self.assertIn('✓ أعلى يسار', labels)
         self.assertIn('أسفل يمين', labels)
         self.assertIn('✓ متوسط', labels)
-        self.assertIn('الحركة مفعلة', labels)
+        self.assertIn('✓ متحرك', labels)
         self.assertIn('sig:1:done', [button.callback_data for button in buttons])
 
     def test_repeat_current_choice_ignores_telegram_not_modified(self):
@@ -343,6 +377,37 @@ class ServiceTests(unittest.TestCase):
         self.bot.send_message.assert_not_called()
         self.bot.edit_message_text.assert_not_called()
         self.assertEqual(self.service.settings(1)['position'], 'br')
+
+    def test_explicit_motion_choice_is_idempotent(self):
+        self.service.configure(self.settings_call('motion-on'))
+        self.service.configure(self.settings_call('motion-on'))
+        self.assertEqual(self.service.settings(1)['moving'], 1)
+        self.service.configure(self.settings_call('motion-off'))
+        self.service.configure(self.settings_call('motion-off'))
+        self.assertEqual(self.service.settings(1)['moving'], 0)
+
+    def test_background_setting_is_private_and_persistent(self):
+        self.service.configure(self.settings_call('bg-black'))
+        self.assertEqual(self.service.settings(1)['background'], 'black')
+        self.assertEqual(self.service.settings(2)['background'], 'keep')
+        self.service.configure(self.settings_call('done'))
+        self.assertEqual(self.service.settings(1)['background'], 'black')
+        self.service.configure(self.settings_call('bg-keep'))
+        self.assertEqual(self.service.settings(1)['background'], 'keep')
+
+    def test_background_schema_migrates_existing_profiles_without_changing_preferences(self):
+        store = Storage()
+        store.execute('CREATE TABLE user_signatures(user_id INTEGER PRIMARY KEY,file_id TEXT,position TEXT,size TEXT,moving INTEGER)')
+        store.execute("INSERT INTO user_signatures VALUES(7,'existing','tl','l',0)")
+        service = sig.SignatureService(self.bot, store.execute, store.query, FFMPEG, self.fetch)
+        service.schema()
+        service.schema()
+        saved = service.settings(7)
+        self.assertEqual((saved['file_id'],saved['position'],saved['size'],saved['moving'],saved['background']),
+                         ('existing','tl','l',0,'keep'))
+        service.worker.shutdown(wait=True)
+        service.controls.shutdown(wait=True)
+        store.db.close()
 
     def test_duplicate_user_and_global_queue_are_bounded(self):
         with patch.object(self.service.worker, 'submit') as submit:
