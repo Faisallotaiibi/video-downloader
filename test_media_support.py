@@ -18,13 +18,38 @@ class MediaTests(unittest.TestCase):
         success.json.return_value = {'code': 0, 'data': {
             'images': ['https://p16.tiktokcdn.com/one.jpg'],
             'music': 'https://v16.tiktokcdn.com/audio.mp3'}}
-        with patch.object(media.browser_requests, 'request', side_effect=[blocked, success]) as fetch:
+        with patch.object(media.browser_requests, 'get', side_effect=RuntimeError('embed blocked')), \
+             patch.object(media.browser_requests, 'request', side_effect=[blocked, success]) as fetch:
             album = media.tiktok_album('https://www.tiktok.com/@test/photo/123')
         self.assertEqual(len(album['images']), 1)
         self.assertEqual(fetch.call_args_list[0].args[0], 'GET')
         self.assertEqual(fetch.call_args_list[1].args[0], 'POST')
         self.assertEqual(fetch.call_args.kwargs['impersonate'], 'chrome')
         self.assertNotIn('cookies', fetch.call_args.kwargs)
+
+    def test_embed_extracts_all_photos_and_sound_for_exact_post(self):
+        import json
+        payload = {'source': {'data': {'/embed/v2/123': {'videoData': {
+            'itemInfos': {'id': '123'},
+            'imagePostInfo': {'displayImages': [
+                {'urlList': ['https://p16.tiktokcdn.com/one.jpeg']},
+                {'urlList': ['https://p16.tiktokcdn.com/two.jpeg']} ]},
+            'musicInfos': {'playUrl': ['https://v16.tiktokcdn.com/audio.mp3']},
+        }}}}}
+        html = '<script id="__FRONTITY_CONNECT_STATE__" type="application/json">' + json.dumps(payload) + '</script>'
+        album = media._web_album(html, expected_id='123')
+        self.assertEqual(len(album['images']), 2)
+        self.assertTrue(album['music'].endswith('audio.mp3'))
+        with self.assertRaises(ValueError):
+            media._web_album(html, expected_id='999')
+
+    def test_embed_success_does_not_use_external_resolver(self):
+        response = MagicMock(status_code=200, text='html')
+        with patch.object(media.browser_requests, 'get', return_value=response), \
+             patch.object(media, '_web_album', return_value={'images': ['photo'], 'music': None}), \
+             patch.object(media.browser_requests, 'request') as fallback:
+            media.tiktok_album('https://www.tiktok.com/@test/photo/123')
+        fallback.assert_not_called()
 
     def test_production_check_disabled_when_unconfigured_or_expired(self):
         with patch.dict(os.environ, {'MEDIA_CHECK_URL': 'https://vt.tiktok.com/test/',

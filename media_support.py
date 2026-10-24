@@ -60,13 +60,25 @@ def _media_url(value):
     return None
 
 
-def _web_album(html):
+def _web_album(html, expected_id=None):
     """Support TikTok's two public hydration formats; never use thumbnails."""
-    for match in re.finditer(r'<script\b[^>]*\bid=[\"\'](?:__UNIVERSAL_DATA_FOR_REHYDRATION__|SIGI_STATE)[\"\'][^>]*>(.*?)</script>', html, re.S):
+    for match in re.finditer(r'<script\b[^>]*\bid=[\"\'](?:__UNIVERSAL_DATA_FOR_REHYDRATION__|SIGI_STATE|__FRONTITY_CONNECT_STATE__)[\"\'][^>]*>(.*?)</script>', html, re.S):
         try:
             state = json.loads(match.group(1))
         except ValueError:
             continue
+        # TikTok's embed page includes the complete photo post even when
+        # the ordinary /photo/ page omits its hydration payload for servers.
+        for entry in state.get('source', {}).get('data', {}).values():
+            video = entry.get('videoData') or {}
+            if expected_id and str(video.get('itemInfos', {}).get('id')) != expected_id:
+                continue
+            photos = video.get('imagePostInfo', {}).get('displayImages', [])
+            if photos:
+                images = [_media_url(p.get('urlList')) for p in photos]
+                if not all(images):
+                    raise ValueError('تعذر العثور على جميع صور المنشور')
+                return {'images': images, 'music': _media_url(video.get('musicInfos', {}).get('playUrl'))}
         scope = state.get('__DEFAULT_SCOPE__', {})
         item = scope.get('webapp.video-detail', {}).get('itemInfo', {}).get('itemStruct', {})
         items = [item] if item else list(state.get('ItemModule', {}).values())
@@ -83,6 +95,19 @@ def _web_album(html):
 def tiktok_album(url):
     if not is_tiktok(url):
         raise ValueError('رابط تيك توك غير صالح')
+    post_id = re.search(r'/(?:photo|video)/(\d+)', urlparse(url).path)
+    if post_id:
+        try:
+            response = browser_requests.get(
+                'https://www.tiktok.com/embed/v2/' + post_id.group(1),
+                impersonate='chrome', timeout=20,
+            )
+            response.raise_for_status()
+            album = _web_album(response.text, expected_id=post_id.group(1))
+            logger.info('TikTok album resolved directly from embed: %s images', len(album['images']))
+            return album
+        except Exception as error:
+            logger.warning('TikTok embed extraction failed: %s', type(error).__name__)
     # yt-dlp does not support TikTok photo posts. This public, keyless
     # resolver is used only for albums; no cookies or credentials are sent.
     # Render's datacenter traffic can receive an HTML anti-bot response to
