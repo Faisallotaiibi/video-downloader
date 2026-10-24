@@ -149,6 +149,28 @@ def tiktok_album(url):
 
 
 def download_asset(url, filename, limit):
+    """Retry transient CDN resets without ever handing off partial files."""
+    for attempt in range(3):
+        try:
+            return _download_asset_once(url, filename, limit)
+        except requests.RequestException as error:
+            response = getattr(error, 'response', None)
+            status = response.status_code if response is not None else None
+            retryable = status in (408, 429) or (status is not None and status >= 500)
+            retryable = retryable or isinstance(error, (
+                requests.ConnectionError, requests.Timeout,
+                requests.exceptions.ChunkedEncodingError,
+            ))
+            if os.path.exists(filename):
+                os.remove(filename)
+            if not retryable or attempt == 2:
+                raise
+            logger.warning('Transient media CDN failure %s HTTP %s; retrying attempt %s/3',
+                           type(error).__name__, status, attempt + 2)
+            time.sleep(.5 * (attempt + 1))
+
+
+def _download_asset_once(url, filename, limit):
     """Bound both advertised and actual size and validate CDN redirects."""
     if not _media_url(url):
         raise ValueError('رابط الوسائط غير صالح')

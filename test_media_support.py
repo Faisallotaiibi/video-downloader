@@ -11,6 +11,35 @@ import media_support as media
 
 
 class MediaTests(unittest.TestCase):
+    def test_cdn_connection_reset_is_retried_and_partial_file_removed(self):
+        import requests
+        with TemporaryDirectory() as folder:
+            target = str(Path(folder, 'photo.jpg'))
+            def fail(url, filename, limit):
+                Path(filename).write_bytes(b'partial')
+                raise requests.ConnectionError('reset')
+            def succeed(url, filename, limit):
+                self.assertFalse(os.path.exists(filename))
+                Path(filename).write_bytes(b'complete')
+                return filename
+            with patch.object(media, '_download_asset_once', side_effect=[fail, succeed]) as fetch:
+                # Callable side effects need explicit dispatch through a sequence.
+                fetch.side_effect = lambda *args: (fail if fetch.call_count == 1 else succeed)(*args)
+                with patch.object(media.time, 'sleep'):
+                    media.download_asset('https://p16.tiktokcdn.com/photo', target, 100)
+            self.assertEqual(Path(target).read_bytes(), b'complete')
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_permanent_cdn_error_is_not_retried(self):
+        import requests
+        response = requests.Response()
+        response.status_code = 403
+        with TemporaryDirectory() as folder, \
+             patch.object(media, '_download_asset_once', side_effect=requests.HTTPError(response=response)) as fetch:
+            with self.assertRaises(requests.HTTPError):
+                media.download_asset('https://p16.tiktokcdn.com/photo', str(Path(folder, 'p')), 100)
+        self.assertEqual(fetch.call_count, 1)
+
     def test_album_resolver_falls_back_from_blocked_get_to_browser_post(self):
         blocked = MagicMock(status_code=403)
         blocked.raise_for_status.side_effect = RuntimeError('blocked')
