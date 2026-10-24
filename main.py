@@ -23,6 +23,7 @@ from flask import Flask, Response, jsonify, render_template_string, request, sen
 
 from media_support import (AudioButtons, download_audio, photo_post_url, send_album,
                            tiktok_album, run_configured_media_check)
+from signatures import SignatureService, SignatureStorage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -402,6 +403,7 @@ WELCOME_MESSAGE = (
     "أهلين 👋 أحمل لك الفيديو وصور تيك توك والصوت\n\n"
     "بس الصق الرابط وأنا أسوي الباقي – بدون علامة مائية طبعًا 😉\n\n"
     "للصوت اضغط تحميل الصوت بعد المقطع أو أرسل كلمة صوت وبعدها الرابط\n\n"
+    "لإضافة توقيعك اكتب توقيعي وارفع صورة PNG أو توقيع GIF\n\n"
     "منصاتي المفضلة: 🎵📷🐦👻🔴"
 )
 
@@ -730,6 +732,29 @@ def keep_alive():
         time.sleep(840)
 
 
+def fetch_video_for_signature(url, folder):
+    options = {
+        'format': format_selector_for(url), 'merge_output_format': 'mp4',
+        'noplaylist': True, 'outtmpl': os.path.join(folder, 'source.%(ext)s'),
+        'max_filesize': MAX_TELEGRAM_FILE_SIZE, 'extractor_args': YOUTUBE_EXTRACTOR_ARGS,
+        'ffmpeg_location': FFMPEG_PATH, 'socket_timeout': 30,
+        'overwrites': True, 'retries': 3, 'fragment_retries': 3,
+        **cookie_opts_for(url),
+    }
+    ydl, info = extract_info_with_retry(options, url, download=True)
+    filename = select_downloaded_file(ydl, info)
+    if not os.path.isfile(filename) or os.path.getsize(filename) > MAX_TELEGRAM_FILE_SIZE:
+        raise ValueError('تعذر تنزيل الأصل لإضافة التوقيع والمقطع السابق متاح')
+    return filename
+
+
+signature_store = SignatureStorage(os.path.join(os.path.dirname(DB_PATH), 'signatures.db'),
+                                   _turso_client if USE_TURSO else None)
+signature_service = SignatureService(bot, signature_store.execute, signature_store.query,
+                                     FFMPEG_PATH, fetch_video_for_signature)
+signature_service.register()
+
+
 @bot.message_handler(commands=['start'])
 def start(message):
     logger.info("Received /start from chat_id=%s", message.chat.id)
@@ -903,11 +928,12 @@ def download(message):
             url, duration, width, height, vcodec, acodec or info.get('acodec'),
         )
 
+        controls = audio_buttons.keyboard(url, message.chat.id, message.from_user.id)
         with open(filename, 'rb') as f:
             # Passing duration/width/height explicitly avoids Telegram clients
             # showing a broken 0:00 / static-thumbnail player when they can't
             # cleanly probe the remuxed file's own metadata.
-            bot.send_video(
+            sent = bot.send_video(
                 message.chat.id,
                 f,
                 caption=SUCCESS_CAPTION,
@@ -915,9 +941,10 @@ def download(message):
                 width=width,
                 height=height,
                 supports_streaming=True,
-                reply_markup=audio_buttons.keyboard(url, message.chat.id, message.from_user.id),
+                reply_markup=controls,
                 timeout=120,
             )
+        signature_service.schedule_attach(sent, url, message.from_user.id, controls)
         log_usage("telegram", requester, url, "success", **telegram_extra)
     except Exception as e:
         logger.exception("Download failed for url=%s", url)
@@ -2381,6 +2408,7 @@ if __name__ == "__main__":
     threading.Thread(target=keep_alive, daemon=True).start()
     threading.Thread(target=run_server, daemon=True).start()
     threading.Thread(target=run_configured_media_check, args=(FFMPEG_PATH,), daemon=True).start()
+    threading.Thread(target=signature_service.activate, daemon=True).start()
     logger.info("Starting Telegram bot polling")
     run_bot_polling()
 
