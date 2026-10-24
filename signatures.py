@@ -143,18 +143,21 @@ def render_signature(source, signature, output, ffmpeg, width, height,
     box_width = max(8, round(out_width * SIZES[size][1]))
     box_height = max(8, round(out_height * .20))
     margin = max(8, round(min(out_width, out_height) * .025))
-    drift = max(4, round(out_width * .10)) if moving else 0
-    bob = max(2, round(out_height * .025)) if moving else 0
-    travel = '(1-cos(t*1.570796))/2'
-    vertical = '(1-cos(t*2.617994))/2'
-    if position == 'cc':
-        x = f'(W-w)/2+{drift}/2*sin(t*1.570796)'
-        y = f'(H-h)/2+{bob}/2*sin(t*2.617994)'
+    if moving:
+        # Cross both full-frame diagonals in an eight-second continuous loop:
+        # TL -> BR (3s), TR (1s), BL (3s), TL (1s). The selected location
+        # sets the starting point; no teleport, clipping, or extra encoder work.
+        phase = {'tl': 0, 'br': 3, 'tr': 4, 'bl': 7, 'cc': 1.5}[position]
+        p = f'mod(t+{phase},8)'
+        horizontal = f'if(lt({p},3),{p}/3,if(lt({p},4),1,if(lt({p},7),(7-{p})/3,0)))'
+        vertical = f'if(lt({p},3),{p}/3,if(lt({p},4),4-{p},if(lt({p},7),({p}-4)/3,8-{p})))'
+        x = f'min({margin},(W-w)/2)+max(0,W-w-2*{margin})*{horizontal}'
+        y = f'min({margin},(H-h)/2)+max(0,H-h-2*{margin})*{vertical}'
+    elif position == 'cc':
+        x, y = '(W-w)/2', '(H-h)/2'
     else:
-        x = (f'W-w-{margin}-{drift}*{travel}' if position.endswith('r')
-             else f'{margin}+{drift}*{travel}')
-        y = (f'H-h-{margin}-{bob}*{vertical}' if position.startswith('b')
-             else f'{margin}+{bob}*{vertical}')
+        x = f'W-w-{margin}' if position.endswith('r') else str(margin)
+        y = f'H-h-{margin}' if position.startswith('b') else str(margin)
     x, y = f'max(0,min(W-w,{x}))', f'max(0,min(H-h,{y}))'
     loop = ['-stream_loop', '-1'] if signature.endswith('.gif') else ['-loop', '1']
     graph = (
@@ -219,7 +222,7 @@ class SignatureService:
         keyboard.row(button(selected('الوسط', bool(settings and settings['position'] == 'cc')), 'pos-cc'))
         keyboard.row(*(button(selected(SIZES[key][0], bool(settings and settings['size'] == key)),
                              'size-' + key) for key in SIZES))
-        keyboard.row(button(selected('متحرك', bool(settings and settings['moving'])), 'motion-on'),
+        keyboard.row(button(selected('متحرك X', bool(settings and settings['moving'])), 'motion-on'),
                      button(selected('ثابت', bool(settings and not settings['moving'])), 'motion-off'))
         remove_black = bool(settings and settings.get('background') == 'black')
         keyboard.row(button(selected('تفريغ الخلفية السوداء', remove_black), 'bg-black'),
@@ -233,7 +236,7 @@ class SignatureService:
             return 'ارفع توقيعك PNG أو GIF كملف بحجم أقل من ٢ ميغابايت\nتوقيع GIF يكون قصير حتى ٦ ثواني'
         return (f"توقيعك محفوظ\nالمكان {POSITIONS.get(settings['position'], 'أسفل يمين')}"
                 f"\nالحجم {SIZES.get(settings['size'], SIZES['m'])[0]}"
-                f"\nالحركة {'مفعلة' if settings['moving'] else 'ثابتة'}"
+                f"\nالحركة {'مسار X على المقطع كامل والمكان يحدد نقطة البداية' if settings['moving'] else 'ثابتة'}"
                 f"\nالخلفية {'تفريغ الأسود' if settings.get('background') == 'black' else 'أصلية'}"
                 '\n\nاضغط تم بعد اختيار إعداداتك')
 

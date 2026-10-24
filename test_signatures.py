@@ -199,6 +199,38 @@ class EncoderTests(unittest.TestCase):
         still = self.render(position='tl', moving=False)
         self.assertEqual(red_box(frame(still, .1)), red_box(frame(still, 1.3)))
 
+    def test_x_motion_crosses_both_diagonals_and_loops_inside_portrait_and_landscape(self):
+        Image.new('RGBA', (120, 60), 'red').save(self.logo)
+        samples = [(0, (0, 0)), (1.5, (.5, .5)), (3, (1, 1)),
+                   (4, (1, 0)), (5.5, (.5, .5)), (7, (0, 1)), (8, (0, 0))]
+        for width, height in [(320, 240), (180, 320)]:
+            with self.subTest(width=width, height=height):
+                make_video(self.source, width, height, duration=8.2)
+                output = self.root / 'x-motion.mp4'
+                sig.render_signature(str(self.source), str(self.logo), str(output),
+                                     FFMPEG, width, height, position='tl')
+                mark_width = round(width * .18)
+                mark_height = round(mark_width / 2)
+                for second, (expected_x, expected_y) in samples:
+                    box = red_box(frame(output, second))
+                    self.assertIsNotNone(box)
+                    self.assertGreaterEqual(box[0], 6)
+                    self.assertGreaterEqual(box[1], 6)
+                    self.assertLessEqual(box[2], width - 6)
+                    self.assertLessEqual(box[3], height - 6)
+                    self.assertAlmostEqual((box[0] - 8) / (width - mark_width - 16), expected_x, delta=.04)
+                    self.assertAlmostEqual((box[1] - 8) / (height - mark_height - 16), expected_y, delta=.04)
+                sig.process([FFMPEG, '-v', 'error', '-i', str(output), '-map', '0:a:0', '-f', 'null', '-'])
+
+    def test_x_motion_starts_at_selected_corner_or_center(self):
+        Image.new('RGBA', (120, 60), 'red').save(self.logo)
+        for position, expected in {'tl': (0, 0), 'br': (1, 1), 'tr': (1, 0),
+                                   'bl': (0, 1), 'cc': (.5, .5)}.items():
+            with self.subTest(position=position):
+                box = red_box(frame(self.render(position=position), 0))
+                self.assertAlmostEqual((box[0] - 8) / (320 - 58 - 16), expected[0], delta=.04)
+                self.assertAlmostEqual((box[1] - 8) / (240 - 29 - 16), expected[1], delta=.04)
+
 
 class ServiceTests(unittest.TestCase):
     def setUp(self):
@@ -335,7 +367,7 @@ class ServiceTests(unittest.TestCase):
         self.assertIn('✓ أعلى يسار', labels)
         self.assertIn('أسفل يمين', labels)
         self.assertIn('✓ متوسط', labels)
-        self.assertIn('✓ متحرك', labels)
+        self.assertIn('✓ متحرك X', labels)
         self.assertIn('sig:1:done', [button.callback_data for button in buttons])
 
     def test_repeat_current_choice_ignores_telegram_not_modified(self):
