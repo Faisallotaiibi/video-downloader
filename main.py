@@ -6,11 +6,13 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import imageio_ffmpeg
@@ -18,6 +20,8 @@ import requests
 import telebot
 import yt_dlp
 from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
+
+from media_support import AudioButtons, download_audio, photo_post_url, send_album, tiktok_album
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -394,15 +398,16 @@ def format_selector_for(url):
     return FORMAT_SELECTOR
 
 WELCOME_MESSAGE = (
-    "أهلين 👋 أنا مساعدك الخاص لتحميل أي فيديو تحبه\n\n"
+    "أهلين 👋 أحمل لك الفيديو وصور تيك توك والصوت\n\n"
     "بس الصق الرابط وأنا أسوي الباقي – بدون علامة مائية طبعًا 😉\n\n"
+    "للصوت اضغط تحميل الصوت بعد المقطع أو أرسل كلمة صوت وبعدها الرابط\n\n"
     "منصاتي المفضلة: 🎵📷🐦👻🔴"
 )
 
-NOT_A_URL_MESSAGE = "هذا مو رابط 🤔\n\nأرسل لي رابط الفيديو مباشرة وأنا أتكفل الباقي 🎬"
+NOT_A_URL_MESSAGE = "هذا مو رابط 🤔\n\nأرسل رابط المقطع أو منشور صور تيك توك مباشرة"
 
 DOWNLOADING_MESSAGES = [
-    "🎬 جاري تجهيز فيديوك...",
+    "جاري تجهيز التحميل 🎬",
     "✨ ثانية وتلقاه...",
     "🚀 شوي وأجهزه لك...",
     "⏳ خلني أشتغل عليه...",
@@ -497,13 +502,14 @@ def friendly_error_message(url, error_text):
     if "max_filesize" in text or "50mb" in text or "أكبر من 50" in error_text:
         return MAX_FILESIZE_MESSAGE
     if "tiktok.com/@" in text and "/photo/" in text:
-        return "رابط تيك توك هذا لمنشور صور وليس مقطع فيديو أرسل رابط فيديو عشان أحمله لك 📹"
+        return "تعذر الوصول لصور منشور تيك توك حاول مرة ثانية"
     if "requested format is not available" in text or "unsupported url" in text:
         return NO_VIDEO_FOUND_MESSAGE
     return GENERIC_ERROR_MESSAGE
 
 
 bot = telebot.TeleBot(BOT_TOKEN)
+audio_buttons = AudioButtons()
 app = Flask(__name__, static_folder=".")
 
 
@@ -727,10 +733,88 @@ def start(message):
     bot.reply_to(message, WELCOME_MESSAGE)
 
 
+def telegram_usage_context(message):
+    user = message.from_user
+    requester = f"@{user.username}" if user.username else (user.first_name or str(message.chat.id))
+    extra = dict(
+        telegram_id=user.id, last_name=user.last_name,
+        language_code=user.language_code, is_premium=getattr(user, 'is_premium', None),
+        chat_type=message.chat.type,
+    )
+    return requester, extra
+
+
+def send_photos(message, url):
+    album = tiktok_album(url)
+    send_album(bot, message.chat.id, album, SUCCESS_CAPTION)
+    if album.get('music'):
+        bot.send_message(
+            message.chat.id, f"تفضل صور المنشور وعددها {len(album['images'])}",
+            reply_markup=audio_buttons.keyboard(url, message.chat.id, message.from_user.id),
+        )
+
+
+def send_audio(message, url, user=None):
+    if not url.lower().startswith(('http://', 'https://')):
+        bot.reply_to(message, "أرسل كلمة صوت وبعدها رابط المقطع أو منشور الصور")
+        return
+    # For a callback, use the person who clicked, not the bot that sent the caption.
+    usage_message = SimpleNamespace(chat=message.chat, from_user=user or message.from_user)
+    requester, extra = telegram_usage_context(usage_message)
+    bot.send_message(message.chat.id, "جاري تجهيز الصوت 🎵")
+    try:
+        if SNAPCHAT_SHORT_LINK_RE.search(url):
+            url = resolve_snapchat_short_link(url) or url
+        with tempfile.TemporaryDirectory(prefix='bot-audio-') as folder:
+            def extract(opts, target, download):
+                opts['extractor_args'] = YOUTUBE_EXTRACTOR_ARGS
+                return extract_info_with_retry(opts, target, download)
+            filename = download_audio(url, folder, FFMPEG_PATH, extract, cookie_opts_for(url))
+            with open(filename, 'rb') as source:
+                bot.send_audio(message.chat.id, source, title='الصوت',
+                               caption=SUCCESS_CAPTION, timeout=120)
+        log_usage('telegram', requester, url, 'success', **extra)
+    except Exception as error:
+        logger.exception('Audio download failed for url=%s', url)
+        text = str(error) if isinstance(error, ValueError) else friendly_error_message(url, str(error))
+        bot.send_message(message.chat.id, text)
+        log_usage('telegram', requester, url, 'failed', str(error), **extra)
+
+
+@bot.message_handler(commands=['audio'])
+def audio_command(message):
+    parts = message.text.split(maxsplit=1)
+    send_audio(message, parts[1].strip() if len(parts) > 1 else '')
+
+
+@bot.callback_query_handler(func=lambda call: bool(call.data and call.data.startswith('audio:')))
+def audio_callback(call):
+    if not call.message:
+        bot.answer_callback_query(call.id, 'أرسل الرابط من جديد')
+        return
+    key = call.data.split(':', 1)[1]
+    url = audio_buttons.claim(key, call.message.chat.id, call.from_user.id)
+    if url is None:
+        bot.answer_callback_query(call.id, 'انتهت صلاحية الزر أو الطلب لمستخدم آخر أرسل الرابط من جديد')
+        return
+    if url is False:
+        bot.answer_callback_query(call.id, 'الصوت قيد التحميل')
+        return
+    try:
+        bot.answer_callback_query(call.id, 'جاري تجهيز الصوت')
+        send_audio(call.message, url, call.from_user)
+    finally:
+        audio_buttons.release(key)
+
+
 @bot.message_handler(content_types=['text'])
 def download(message):
     logger.info("Received message from chat_id=%s: %r", message.chat.id, message.text)
     url = message.text.strip()
+    audio_request = re.match(r'^صوت\s+(.+)', url, re.S)
+    if audio_request:
+        send_audio(message, audio_request.group(1).strip())
+        return
     requester = f"@{message.from_user.username}" if message.from_user.username else (
         message.from_user.first_name or str(message.chat.id)
     )
@@ -757,6 +841,10 @@ def download(message):
     bot.reply_to(message, random.choice(DOWNLOADING_MESSAGES))
     filename = None
     try:
+        if photo_post_url(url):
+            send_photos(message, url)
+            log_usage('telegram', requester, url, 'success', **telegram_extra)
+            return
         ydl_opts = {
             'format': format_selector_for(url),
             'merge_output_format': 'mp4',
@@ -778,7 +866,15 @@ def download(message):
             'fragment_retries': 3,
             **cookie_opts_for(url),
         }
-        ydl, info = extract_info_with_retry(ydl_opts, url, download=True)
+        try:
+            ydl, info = extract_info_with_retry(ydl_opts, url, download=True)
+        except Exception as error:
+            photo_url = photo_post_url(url, str(error))
+            if not photo_url:
+                raise
+            send_photos(message, photo_url)
+            log_usage('telegram', requester, url, 'success', **telegram_extra)
+            return
         filename = select_downloaded_file(ydl, info)
 
         if not os.path.exists(filename):
@@ -816,6 +912,7 @@ def download(message):
                 width=width,
                 height=height,
                 supports_streaming=True,
+                reply_markup=audio_buttons.keyboard(url, message.chat.id, message.from_user.id),
                 timeout=120,
             )
         log_usage("telegram", requester, url, "success", **telegram_extra)
@@ -2282,3 +2379,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
     logger.info("Starting Telegram bot polling")
     run_bot_polling()
+

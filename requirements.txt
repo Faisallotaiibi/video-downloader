@@ -2,6 +2,7 @@ pyTelegramBotAPI
 yt-dlp
 requests
 flask
+Pillow
 imageio-ffmpeg
 libsql-client
 # yt-dlp needs this to impersonate a real browser's TLS fingerprint for
