@@ -275,6 +275,75 @@ class ServiceTests(unittest.TestCase):
         self.service.configure(call)
         self.assertEqual(self.service.settings(1)['position'], 'br')
 
+    def settings_call(self, action):
+        return NS(id='setting-callback', data='sig:1:' + action, from_user=NS(id=1),
+                  message=NS(chat=NS(id=5), message_id=77))
+
+    def test_choices_edit_same_panel_without_sending_new_messages(self):
+        for action in ['pos-tl', 'size-l', 'motion']:
+            self.service.configure(self.settings_call(action))
+        self.assertEqual(self.bot.edit_message_text.call_count, 3)
+        for call in self.bot.edit_message_text.call_args_list:
+            self.assertEqual(call.args[1:3], (5, 77))
+        self.bot.send_message.assert_not_called()
+        settings = self.service.settings(1)
+        self.assertEqual((settings['position'], settings['size'], settings['moving']), ('tl', 'l', 0))
+        text = self.bot.edit_message_text.call_args.args[0]
+        self.assertIn('أعلى يسار', text)
+        self.assertIn('كبير', text)
+        self.assertIn('ثابتة', text)
+
+    def test_selected_buttons_are_marked_and_done_is_available(self):
+        self.service.configure(self.settings_call('pos-tl'))
+        markup = self.bot.edit_message_text.call_args.kwargs['reply_markup']
+        buttons = [button for row in markup.keyboard for button in row]
+        labels = [button.text for button in buttons]
+        self.assertIn('✓ أعلى يسار', labels)
+        self.assertIn('أسفل يمين', labels)
+        self.assertIn('✓ متوسط', labels)
+        self.assertIn('الحركة مفعلة', labels)
+        self.assertIn('sig:1:done', [button.callback_data for button in buttons])
+
+    def test_repeat_current_choice_ignores_telegram_not_modified(self):
+        class NotModified(Exception):
+            error_code = 400
+            description = 'Bad Request: message is not modified'
+        self.bot.edit_message_text.side_effect = NotModified()
+        with patch.object(self.service, 'execute', wraps=self.service.execute) as write:
+            self.service.configure(self.settings_call('pos-br'))
+            self.service.configure(self.settings_call('pos-br'))
+        write.assert_not_called()
+        self.bot.send_message.assert_not_called()
+        self.assertEqual(self.bot.answer_callback_query.call_count, 2)
+
+    def test_done_closes_panel_and_keeps_saved_settings(self):
+        self.service.configure(self.settings_call('pos-tr'))
+        before = self.service.settings(1)
+        self.service.pending[(5, 1)] = time.monotonic() + 600
+        self.service.configure(self.settings_call('done'))
+        call = self.bot.edit_message_text.call_args
+        self.assertIn('تحميل بتوقيعي', call.args[0])
+        self.assertEqual(call.kwargs['reply_markup'].keyboard, [])
+        self.assertEqual(self.service.settings(1), before)
+        self.assertNotIn((5, 1), self.service.pending)
+        self.bot.send_message.assert_not_called()
+
+    def test_upload_prompt_and_delete_also_edit_existing_panel(self):
+        self.service.configure(self.settings_call('upload'))
+        self.assertIn((5, 1), self.service.pending)
+        self.assertIn('PNG', self.bot.edit_message_text.call_args.args[0])
+        self.service.configure(self.settings_call('delete'))
+        self.assertIsNone(self.service.settings(1))
+        self.assertIsNotNone(self.service.settings(2))
+        self.bot.send_message.assert_not_called()
+
+    def test_storage_error_does_not_send_duplicate_menu(self):
+        with patch.object(self.service, 'execute', side_effect=RuntimeError('storage error')):
+            self.service.configure(self.settings_call('pos-tr'))
+        self.bot.send_message.assert_not_called()
+        self.bot.edit_message_text.assert_not_called()
+        self.assertEqual(self.service.settings(1)['position'], 'br')
+
     def test_duplicate_user_and_global_queue_are_bounded(self):
         with patch.object(self.service.worker, 'submit') as submit:
             one, two, three = self.token(1), self.token(2), self.token(3)

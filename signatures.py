@@ -179,17 +179,40 @@ class SignatureService:
         rows = self.query('SELECT * FROM user_signatures WHERE user_id=?', (user_id,))
         return rows[0] if rows else None
 
-    def menu_markup(self, user_id):
+    def menu_markup(self, user_id, settings=None):
         keyboard = types.InlineKeyboardMarkup(row_width=2)
         def button(text, action):
             return types.InlineKeyboardButton(text, callback_data=f'sig:{user_id}:{action}')
+        def selected(text, current):
+            return ('✓ ' if current else '') + text
         keyboard.row(button('رفع أو تغيير توقيعي', 'upload'))
         for left, right in [('br', 'bl'), ('tr', 'tl')]:
-            keyboard.row(button(POSITIONS[left], 'pos-' + left), button(POSITIONS[right], 'pos-' + right))
-        keyboard.row(button('الوسط', 'pos-cc'))
-        keyboard.row(*(button(SIZES[key][0], 'size-' + key) for key in SIZES))
-        keyboard.row(button('حركة التوقيع', 'motion'), button('حذف توقيعي', 'delete'))
+            keyboard.row(*(button(selected(POSITIONS[key], bool(settings and settings['position'] == key)),
+                                  'pos-' + key) for key in (left, right)))
+        keyboard.row(button(selected('الوسط', bool(settings and settings['position'] == 'cc')), 'pos-cc'))
+        keyboard.row(*(button(selected(SIZES[key][0], bool(settings and settings['size'] == key)),
+                             'size-' + key) for key in SIZES))
+        movement = 'الحركة مفعلة' if settings and settings['moving'] else 'الحركة متوقفة'
+        keyboard.row(button(movement, 'motion'), button('حذف توقيعي', 'delete'))
+        keyboard.row(button('تم', 'done'))
         return keyboard
+
+    def menu_text(self, settings):
+        if not settings:
+            return 'ارفع توقيعك PNG أو GIF كملف بحجم أقل من ٢ ميغابايت\nتوقيع GIF يكون قصير حتى ٦ ثواني'
+        return (f"توقيعك محفوظ\nالمكان {POSITIONS.get(settings['position'], 'أسفل يمين')}"
+                f"\nالحجم {SIZES.get(settings['size'], SIZES['m'])[0]}"
+                f"\nالحركة {'مفعلة' if settings['moving'] else 'ثابتة'}\n\nاضغط تم بعد اختيار إعداداتك")
+
+    def edit_panel(self, call, text, markup):
+        try:
+            self.bot.edit_message_text(text, call.message.chat.id, call.message.message_id,
+                                       reply_markup=markup)
+        except Exception as error:
+            # Selecting an already-selected position/size is a successful no-op.
+            if getattr(error, 'error_code', None) == 400 and 'message is not modified' in getattr(error, 'description', '').lower():
+                return
+            raise
 
     def menu(self, message):
         if not self.enabled:
@@ -197,15 +220,11 @@ class SignatureService:
             return
         try:
             settings = self.settings(message.from_user.id)
-            if settings:
-                text = (f"توقيعك محفوظ\nالمكان {POSITIONS.get(settings['position'], 'أسفل يمين')}"
-                        f"\nالحجم {SIZES.get(settings['size'], SIZES['m'])[0]}"
-                        f"\nالحركة {'مفعلة' if settings['moving'] else 'ثابتة'}")
-            else:
-                text = 'ارفع توقيعك PNG أو GIF كملف بحجم أقل من ٢ ميغابايت\nتوقيع GIF يكون قصير حتى ٦ ثواني'
+            if not settings:
                 with self.lock:
                     self.pending[(message.chat.id, message.from_user.id)] = time.monotonic() + 600
-            self.bot.reply_to(message, text, reply_markup=self.menu_markup(message.from_user.id))
+            self.bot.reply_to(message, self.menu_text(settings),
+                              reply_markup=self.menu_markup(message.from_user.id, settings))
         except Exception as error:
             logger.warning('Signature menu unavailable: %s', type(error).__name__)
             self.bot.reply_to(message, 'تعذر فتح إعدادات التوقيع حاليًا والتحميل المعتاد شغال')
@@ -238,12 +257,13 @@ class SignatureService:
             self.execute('INSERT INTO user_signatures(user_id,file_id) VALUES (?,?) '
                          'ON CONFLICT(user_id) DO UPDATE SET file_id=excluded.file_id',
                          (message.from_user.id, media.file_id))
-            if not self.settings(message.from_user.id):
+            settings = self.settings(message.from_user.id)
+            if not settings:
                 raise ValueError('تعذر حفظ التوقيع حاول مرة ثانية')
             with self.lock:
                 self.pending.pop(key, None)
             self.bot.reply_to(message, 'حفظت توقيعك الحين أرسل رابط مقطع واضغط تحميل بتوقيعي',
-                              reply_markup=self.menu_markup(message.from_user.id))
+                              reply_markup=self.menu_markup(message.from_user.id, settings))
         except Exception as error:
             logger.warning('Signature upload failed: %s', type(error).__name__)
             self.bot.reply_to(message, str(error) if isinstance(error, ValueError)
@@ -260,6 +280,14 @@ class SignatureService:
         action, user_id = parts[2], call.from_user.id
         self.bot.answer_callback_query(call.id)
         try:
+            if action == 'done':
+                settings = self.settings(user_id)
+                with self.lock:
+                    self.pending.pop((call.message.chat.id, user_id), None)
+                text = ('تم حفظ إعدادات توقيعك\nارجع للمقطع واضغط تحميل بتوقيعي' if settings
+                        else 'لرفع توقيعك اكتب توقيعي')
+                self.edit_panel(call, text, types.InlineKeyboardMarkup())
+                return
             if action == 'upload':
                 with self.lock:
                     # Bound abandoned upload prompts without retaining messages.
@@ -275,21 +303,28 @@ class SignatureService:
                 if not settings:
                     raise ValueError('ارفع توقيعك أول')
                 if action.startswith('pos-') and action[4:] in POSITIONS:
-                    self.execute('UPDATE user_signatures SET position=? WHERE user_id=?', (action[4:], user_id))
+                    if settings['position'] != action[4:]:
+                        self.execute('UPDATE user_signatures SET position=? WHERE user_id=?', (action[4:], user_id))
                     text = 'مكان توقيعك ' + POSITIONS[action[4:]]
                 elif action.startswith('size-') and action[5:] in SIZES:
-                    self.execute('UPDATE user_signatures SET size=? WHERE user_id=?', (action[5:], user_id))
+                    if settings['size'] != action[5:]:
+                        self.execute('UPDATE user_signatures SET size=? WHERE user_id=?', (action[5:], user_id))
                     text = 'حجم توقيعك ' + SIZES[action[5:]][0]
                 elif action == 'motion':
                     self.execute('UPDATE user_signatures SET moving=? WHERE user_id=?', (int(not settings['moving']), user_id))
                     text = 'حركة التوقيع ' + ('مفعلة' if not settings['moving'] else 'ثابتة')
                 else:
                     raise ValueError('خيار غير صالح')
-            self.bot.send_message(call.message.chat.id, text, reply_markup=self.menu_markup(user_id))
+            settings = self.settings(user_id)
+            panel_text = text if action in ('upload', 'delete') else self.menu_text(settings)
+            self.edit_panel(call, panel_text, self.menu_markup(user_id, settings))
         except Exception as error:
             logger.warning('Signature settings failed: %s', type(error).__name__)
-            self.bot.send_message(call.message.chat.id, str(error) if isinstance(error, ValueError)
-                                  else 'تعذر تحديث الإعدادات حاول بعد شوي')
+            try:
+                self.bot.answer_callback_query(call.id, str(error) if isinstance(error, ValueError)
+                                               else 'تعذر تحديث الإعدادات حاول بعد شوي', show_alert=True)
+            except Exception:
+                pass
 
     def attach(self, sent, url, user_id, original_markup):
         if not self.enabled or not sent or not sent.video:
