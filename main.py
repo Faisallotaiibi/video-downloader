@@ -21,7 +21,8 @@ import telebot
 import yt_dlp
 from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
 
-from media_support import AudioButtons, download_audio, photo_post_url, send_album, tiktok_album
+from media_support import (AudioButtons, download_audio, photo_post_url, send_album,
+                           tiktok_album, run_configured_media_check)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -503,6 +504,8 @@ def friendly_error_message(url, error_text):
         return MAX_FILESIZE_MESSAGE
     if "tiktok.com/@" in text and "/photo/" in text:
         return "تعذر الوصول لصور منشور تيك توك حاول مرة ثانية"
+    if "تعذر الوصول إلى صور المنشور" in error_text:
+        return "تعذر الاتصال بمصدر صور تيك توك حاليًا حاول بعد شوي"
     if "requested format is not available" in text or "unsupported url" in text:
         return NO_VIDEO_FOUND_MESSAGE
     return GENERIC_ERROR_MESSAGE
@@ -2377,6 +2380,7 @@ if __name__ == "__main__":
     init_db()
     threading.Thread(target=keep_alive, daemon=True).start()
     threading.Thread(target=run_server, daemon=True).start()
+    threading.Thread(target=run_configured_media_check, args=(FFMPEG_PATH,), daemon=True).start()
     logger.info("Starting Telegram bot polling")
     run_bot_polling()
 

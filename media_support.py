@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import uuid
 
 from PIL import Image, ImageOps
+from curl_cffi import requests as browser_requests
 import requests
 from telebot import types
 
@@ -84,20 +85,39 @@ def tiktok_album(url):
         raise ValueError('رابط تيك توك غير صالح')
     # yt-dlp does not support TikTok photo posts. This public, keyless
     # resolver is used only for albums; no cookies or credentials are sent.
-    try:
-        with requests.get('https://www.tikwm.com/api/', params={'url': url}, timeout=(10, 25)) as response:
+    # Render's datacenter traffic can receive an HTML anti-bot response to
+    # ordinary requests. Use the already-installed browser TLS transport,
+    # and try a POST if the GET is rejected. Never forward session cookies.
+    for method, endpoint in [('GET', 'https://www.tikwm.com/api/'),
+                             ('POST', 'https://www.tikwm.com/api/'),
+                             ('GET', 'https://tikwm.com/api/')]:
+        status = None
+        try:
+            options = {'params' if method == 'GET' else 'data': {'url': url}}
+            response = browser_requests.request(
+                method, endpoint, impersonate='chrome', timeout=20,
+                headers={'Accept': 'application/json', 'Referer': 'https://www.tikwm.com/'},
+                **options,
+            )
+            status = response.status_code
             response.raise_for_status()
             payload = response.json()
-        data = payload.get('data') or {}
-        photos = data.get('images') or []
-        if payload.get('code') == 0 and photos:
-            images = [_media_url(p) for p in photos]
-            if not all(images):
-                raise ValueError('تعذر العثور على جميع صور المنشور')
-            return {'images': images, 'music': _media_url(data.get('music'))}
-    except (requests.RequestException, ValueError):
-        logger.warning('Public TikTok album resolver unavailable; trying the public page')
-    from curl_cffi import requests as browser_requests
+            data = payload.get('data') or {}
+            photos = data.get('images') or []
+            if payload.get('code') == 0 and photos:
+                images = [_media_url(p) for p in photos]
+                if not all(images):
+                    raise ValueError('تعذر العثور على جميع صور المنشور')
+                logger.info('TikTok album resolved via %s %s: %s images', method,
+                            urlparse(endpoint).hostname, len(images))
+                return {'images': images, 'music': _media_url(data.get('music'))}
+            logger.warning('TikTok album resolver %s returned HTTP %s code=%s images=%s',
+                           method, status, payload.get('code'), len(photos))
+        except Exception as error:
+            # Status/class are enough to diagnose blocking without logging
+            # response bodies, signed CDN URLs, or any credentials.
+            logger.warning('TikTok album resolver %s %s failed: HTTP %s %s',
+                           method, urlparse(endpoint).hostname, status, type(error).__name__)
     response = browser_requests.get(url, impersonate='chrome', timeout=25)
     response.raise_for_status()
     return _web_album(response.text)
@@ -220,6 +240,33 @@ def download_audio(url, folder, ffmpeg, extract_info, cookie_opts):
     if not os.path.isfile(source):
         raise ValueError('تعذر تنزيل ملف الصوت')
     return make_mp3(source, os.path.join(folder, 'audio.mp3'), ffmpeg)
+
+
+def run_configured_media_check(ffmpeg):
+    """Opt-in, time-limited production network check; never sends messages."""
+    url = os.environ.get('MEDIA_CHECK_URL', '')
+    try:
+        until = float(os.environ.get('MEDIA_CHECK_UNTIL', '0'))
+    except ValueError:
+        return
+    if not is_tiktok(url) or not 0 < until - time.time() <= 3600:
+        return
+    logger.info('MEDIA_CHECK started')
+    try:
+        album = tiktok_album(url)
+        count = len(album['images'])
+        with tempfile.TemporaryDirectory(prefix='bot-media-check-') as folder:
+            for index, image in enumerate(album['images']):
+                filename, _ = prepare_photo(image, os.path.join(folder, 'photo.jpg'))
+                os.remove(filename)
+                logger.info('MEDIA_CHECK photo %s/%s OK', index + 1, count)
+            if album.get('music'):
+                source = download_asset(album['music'], os.path.join(folder, 'source.audio'), FILE_LIMIT)
+                output = make_mp3(source, os.path.join(folder, 'audio.mp3'), ffmpeg)
+                logger.info('MEDIA_CHECK MP3 OK bytes=%s', os.path.getsize(output))
+        logger.info('MEDIA_CHECK SUCCESS photos=%s audio=%s', count, bool(album.get('music')))
+    except Exception as error:
+        logger.error('MEDIA_CHECK FAILED %s: %s', type(error).__name__, str(error)[:200])
 
 
 class AudioButtons:

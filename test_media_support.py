@@ -11,6 +11,28 @@ import media_support as media
 
 
 class MediaTests(unittest.TestCase):
+    def test_album_resolver_falls_back_from_blocked_get_to_browser_post(self):
+        blocked = MagicMock(status_code=403)
+        blocked.raise_for_status.side_effect = RuntimeError('blocked')
+        success = MagicMock(status_code=200)
+        success.json.return_value = {'code': 0, 'data': {
+            'images': ['https://p16.tiktokcdn.com/one.jpg'],
+            'music': 'https://v16.tiktokcdn.com/audio.mp3'}}
+        with patch.object(media.browser_requests, 'request', side_effect=[blocked, success]) as fetch:
+            album = media.tiktok_album('https://www.tiktok.com/@test/photo/123')
+        self.assertEqual(len(album['images']), 1)
+        self.assertEqual(fetch.call_args_list[0].args[0], 'GET')
+        self.assertEqual(fetch.call_args_list[1].args[0], 'POST')
+        self.assertEqual(fetch.call_args.kwargs['impersonate'], 'chrome')
+        self.assertNotIn('cookies', fetch.call_args.kwargs)
+
+    def test_production_check_disabled_when_unconfigured_or_expired(self):
+        with patch.dict(os.environ, {'MEDIA_CHECK_URL': 'https://vt.tiktok.com/test/',
+                                     'MEDIA_CHECK_UNTIL': '0'}), \
+             patch.object(media, 'tiktok_album') as album:
+            media.run_configured_media_check('ffmpeg')
+        album.assert_not_called()
+
     def test_photo_detection_and_host_validation(self):
         url = 'https://vt.tiktok.com/example/'
         resolved = 'https://www.tiktok.com/@example/photo/123456'
