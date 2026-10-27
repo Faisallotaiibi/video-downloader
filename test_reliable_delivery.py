@@ -41,6 +41,7 @@ class DeliveryTests(unittest.TestCase):
         self.store.schema()
         self.bot = telebot.TeleBot(TOKEN, threaded=False)
         self.bot.set_webhook = Mock(return_value=True)
+        self.bot.get_me = Mock(return_value=SimpleNamespace(username='The966bot'))
         self.bot.get_webhook_info = Mock(return_value=SimpleNamespace(
             url='https://example.test' + WEBHOOK_PATH, pending_update_count=2))
         self.delivery = WebhookDelivery(self.bot, self.store, TOKEN, 'https://example.test')

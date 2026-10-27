@@ -13,6 +13,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from urllib.parse import urlparse
 
 from flask import jsonify, request
 from telebot import types
@@ -190,11 +191,17 @@ class WebhookDelivery:
         delay = 1
         while not self.stopping.is_set():
             try:
+                before = self.bot.get_webhook_info(timeout=15)
+                self._audit(before, 'before-registration')
+                identity = self.bot.get_me(timeout=15)
+                logger.info('Telegram bot identity username=%s expected_webhook_host=%s',
+                            identity.username, urlparse(self.url).netloc)
                 if not self.bot.set_webhook(url=self.url, secret_token=self.secret,
                         max_connections=2, allowed_updates=['message', 'callback_query'],
                         drop_pending_updates=False, timeout=15):
                     raise RuntimeError('Webhook registration was rejected')
                 info = self.bot.get_webhook_info(timeout=15)
+                self._audit(info, 'after-registration')
                 if info.url != self.url:
                     raise RuntimeError('Webhook verification failed')
                 logger.info('Telegram webhook verified persistent_inbox=%s pending=%s',
@@ -204,6 +211,13 @@ class WebhookDelivery:
                 logger.warning('Webhook registration retry: %s', type(error).__name__)
                 self.stopping.wait(delay)
                 delay = min(delay * 2, 60)
+
+    def _audit(self, info, stage):
+        error = str(getattr(info, 'last_error_message', '') or '')
+        error = error.replace(str(getattr(self.bot, 'token', 'not-a-token')), '[redacted]')
+        logger.info('Telegram delivery audit stage=%s host=%s path_matches=%s pending=%s last_error_date=%s last_error=%s',
+                    stage, urlparse(info.url).netloc, info.url == self.url,
+                    info.pending_update_count, getattr(info, 'last_error_date', None), error[:300])
 
     def _worker(self):
         while not self.stopping.is_set():
