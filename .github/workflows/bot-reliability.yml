@@ -28,7 +28,7 @@ jobs:
         env:
           BOT_TOKEN: '123456789:unit_test_only'
           BOT_TRANSPORT: polling
-        run: python -m unittest -v test_reliable_delivery test_media_support test_signatures test_public_users
+        run: python -m unittest -v test_reliable_delivery test_media_support test_signatures
   availability:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

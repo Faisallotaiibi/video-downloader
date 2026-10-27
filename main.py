@@ -26,7 +26,6 @@ from media_support import (AudioButtons, download_audio, photo_post_url, send_al
                            tiktok_album, run_configured_media_check)
 from signatures import SignatureService, SignatureStorage
 from reliable_delivery import InboxStore, WebhookDelivery, TursoHTTP
-from public_users import PublicUsers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -532,16 +531,6 @@ def inbox_remote_factory():
     return TursoHTTP(TURSO_DATABASE_URL, TURSO_AUTH_TOKEN)
 
 
-# Separate connection/executor: count outages cannot occupy the delivery DB.
-public_user_store = InboxStore(
-    DB_PATH,
-    remote_factory=inbox_remote_factory if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN else None,
-    require_remote=ON_RENDER,
-)
-public_users = PublicUsers(public_user_store.execute)
-public_users.install(bot)
-
-
 delivery = None
 if BOT_TRANSPORT == 'webhook':
     inbox = InboxStore(
@@ -793,8 +782,7 @@ signature_service.register()
 @bot.message_handler(commands=['start'])
 def start(message):
     logger.info("Received /start from chat_id=%s", message.chat.id)
-    bot.reply_to(message, WELCOME_MESSAGE + '\n\n' + public_users.text(message.from_user),
-                 reply_markup=public_users.keyboard())
+    bot.reply_to(message, WELCOME_MESSAGE)
 
 
 def telegram_usage_context(message):
@@ -2454,7 +2442,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
     init_db()
-    threading.Thread(target=public_users.activate, daemon=True).start()
     threading.Thread(target=run_server, daemon=True).start()
     threading.Thread(target=run_configured_media_check, args=(FFMPEG_PATH,), daemon=True).start()
     threading.Thread(target=signature_service.activate, daemon=True).start()
