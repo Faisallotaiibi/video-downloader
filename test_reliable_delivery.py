@@ -1,4 +1,5 @@
 import json
+import inspect
 import os
 from pathlib import Path
 import sqlite3
@@ -12,7 +13,7 @@ from unittest.mock import Mock, patch
 from flask import Flask
 import telebot
 
-from reliable_delivery import InboxStore, WebhookDelivery, WEBHOOK_PATH, webhook_secret
+from reliable_delivery import InboxStore, WebhookDelivery, TursoHTTP, WEBHOOK_PATH, webhook_secret
 
 
 TOKEN = '123456789:unit_test_only'
@@ -244,6 +245,59 @@ class DeliveryTests(unittest.TestCase):
         finally:
             for store in stores:
                 store.executor.shutdown()
+
+
+    def test_real_telegram_identity_probe_uses_supported_api_signature(self):
+        inspect.signature(telebot.TeleBot.get_me).bind(self.bot)
+
+    def test_http_database_protocol_and_timeouts(self):
+        response = Mock()
+        response.json.return_value = {'results': [
+            {'type': 'ok', 'response': {'result': {
+                'cols': [{'name': 'id'}, {'name': 'payload'}, {'name': 'score'}, {'name': 'empty'}],
+                'rows': [[{'type': 'integer', 'value': '42'}, {'type': 'text', 'value': '{}'},
+                          {'type': 'float', 'value': 1.5}, {'type': 'null'}]]}}},
+            {'type': 'ok', 'response': {'type': 'close'}}]}
+        with patch('reliable_delivery.requests.post') as post:
+            post.return_value.__enter__.return_value = response
+            client = TursoHTTP('libsql://example.turso.io', 'private-test-token')
+            result = client.execute('SELECT ?,?,?', (42, '{}', None))
+            self.assertEqual(result.rows[0].asdict(),
+                             {'id': 42, 'payload': '{}', 'score': 1.5, 'empty': None})
+            args = post.call_args
+            self.assertEqual(args.args[0], 'https://example.turso.io/v2/pipeline')
+            self.assertEqual(args.kwargs['timeout'], (2, 3))
+            self.assertEqual(args.kwargs['headers']['Connection'], 'close')
+            self.assertEqual(args.kwargs['json']['requests'][-1], {'type': 'close'})
+            self.assertEqual(args.kwargs['json']['requests'][0]['stmt']['args'][0],
+                             {'type': 'integer', 'value': '42'})
+
+    def test_http_database_rejects_sql_error_without_exposing_token(self):
+        response = Mock()
+        response.json.return_value = {'results': [
+            {'type': 'error', 'error': {'code': 'SQLITE_BUSY', 'message': 'private-test-token'}}]}
+        with patch('reliable_delivery.requests.post') as post:
+            post.return_value.__enter__.return_value = response
+            with self.assertRaisesRegex(RuntimeError, '^Inbox SQL failed: SQLITE_BUSY
+        self.store.accept(update())
+        self.store.claim('owner')
+        self.store.finish(1, 'owner')
+        self.store.execute('UPDATE telegram_inbox SET finished=?', (time.time() - 86401,))
+        self.store.prune()
+        self.assertEqual(self.rows(), [])
+
+
+if __name__ == '__main__':
+    unittest.main()
+):
+                TursoHTTP('https://example.turso.io', 'private-test-token').execute('SELECT 1')
+
+    def test_http_database_does_not_blindly_retry_uncertain_write(self):
+        import requests
+        with patch('reliable_delivery.requests.post', side_effect=requests.Timeout) as post:
+            with self.assertRaises(requests.Timeout):
+                TursoHTTP('https://example.turso.io', 'test').execute('INSERT INTO t VALUES (?)', (1,))
+            self.assertEqual(post.call_count, 1)
 
     def test_completed_payload_is_removed_and_old_dedup_records_are_pruned(self):
         self.store.accept(update())

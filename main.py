@@ -25,7 +25,7 @@ from flask import Flask, Response, jsonify, render_template_string, request, sen
 from media_support import (AudioButtons, download_audio, photo_post_url, send_album,
                            tiktok_album, run_configured_media_check)
 from signatures import SignatureService, SignatureStorage
-from reliable_delivery import InboxStore, WebhookDelivery
+from reliable_delivery import InboxStore, WebhookDelivery, TursoHTTP
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -528,11 +528,7 @@ app = Flask(__name__, static_folder=".")
 
 
 def inbox_remote_factory():
-    import libsql_client
-    return libsql_client.create_client_sync(
-        url=TURSO_DATABASE_URL.replace('libsql://', 'https://', 1),
-        auth_token=TURSO_AUTH_TOKEN,
-    )
+    return TursoHTTP(TURSO_DATABASE_URL, TURSO_AUTH_TOKEN)
 
 
 delivery = None
@@ -972,6 +968,7 @@ def download(message):
                 reply_markup=controls,
                 timeout=120,
             )
+        logger.info('Telegram video delivered message_id=%s', getattr(sent, 'message_id', None))
         signature_service.schedule_attach(sent, url, message.from_user.id, controls)
         log_usage("telegram", requester, url, "success", **telegram_extra)
     except Exception as e:

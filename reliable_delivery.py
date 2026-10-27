@@ -15,6 +15,9 @@ import time
 import uuid
 from urllib.parse import urlparse
 
+import requests
+from types import SimpleNamespace
+
 from flask import jsonify, request
 from telebot import types
 
@@ -25,6 +28,67 @@ MAX_BODY = 1024 * 1024
 
 def webhook_secret(token):
     return hmac.new(token.encode(), b'the966bot-webhook-v1', hashlib.sha256).hexdigest()
+
+
+
+class _HTTPRow(dict):
+    def asdict(self):
+        return dict(self)
+
+
+class TursoHTTP:
+    """Stateless bounded SQL requests; no stale async keep-alive sessions."""
+    def __init__(self, url, token):
+        self.url = url.replace('libsql://', 'https://', 1).replace('turso://', 'https://', 1).rstrip('/') + '/v2/pipeline'
+        if not self.url.startswith('https://'):
+            raise ValueError('Persistent inbox requires HTTPS')
+        self.token = token
+
+    @staticmethod
+    def value(value):
+        if value is None:
+            return {'type': 'null'}
+        if isinstance(value, (int, bool)):
+            return {'type': 'integer', 'value': str(int(value))}
+        if isinstance(value, float):
+            return {'type': 'float', 'value': value}
+        if isinstance(value, str):
+            return {'type': 'text', 'value': value}
+        raise TypeError('Unsupported SQL parameter')
+
+    def execute(self, sql, params=()):
+        payload = {'requests': [
+            {'type': 'execute', 'stmt': {'sql': sql, 'args': [self.value(v) for v in params], 'want_rows': True}},
+            {'type': 'close'}]}
+        # No automatic write retries: callers resolve uncertain commits by
+        # update ID. Fresh requests avoid the idle-connection reset observed in
+        # production, and the explicit close releases the database stream.
+        with requests.post(self.url, json=payload, headers={
+                'Authorization': 'Bearer ' + self.token, 'Connection': 'close'},
+                timeout=(2, 3)) as response:
+            response.raise_for_status()
+            results = response.json()['results']
+        result = results[0]
+        if result.get('type') != 'ok':
+            code = result.get('error', {}).get('code', 'UNKNOWN')
+            raise RuntimeError('Inbox SQL failed: ' + str(code))
+        table = result['response']['result']
+        columns = [col['name'] for col in table.get('cols', [])]
+        def decode(cell):
+            kind = cell['type']
+            if kind == 'null':
+                return None
+            if kind == 'integer':
+                return int(cell['value'])
+            if kind == 'float':
+                return float(cell['value'])
+            return cell.get('value')
+        rows = [_HTTPRow(zip(columns, [decode(cell) for cell in row]))
+                for row in table.get('rows', [])]
+        return SimpleNamespace(rows=rows)
+
+    def close(self):
+        pass
 
 
 class InboxStore:
@@ -57,7 +121,7 @@ class InboxStore:
 
     def execute(self, sql, params=()):
         if self.executor:
-            if not self.slot.acquire(timeout=.5):
+            if not self.slot.acquire(timeout=2):
                 raise TimeoutError('Inbox storage is busy')
             self.busy_since = time.monotonic()
             try:
@@ -71,7 +135,7 @@ class InboxStore:
                 self.slot.release()
             future.add_done_callback(finished)
             # No fallback: the sender must retry if durability cannot be confirmed.
-            return future.result(timeout=5)
+            return future.result(timeout=6)
         with sqlite3.connect(self.path, timeout=3) as connection:
             connection.row_factory = sqlite3.Row
             cursor = connection.execute(sql, params)
@@ -86,8 +150,6 @@ class InboxStore:
 
     def accept(self, payload):
         update_id = payload['update_id']
-        if self.execute('SELECT update_id FROM telegram_inbox WHERE update_id=?', (update_id,)):
-            return False
         rows = self.execute(
             'INSERT OR IGNORE INTO telegram_inbox(update_id,payload,created) '
             'SELECT ?,?,? WHERE (SELECT COUNT(*) FROM telegram_inbox '
@@ -224,7 +286,7 @@ class WebhookDelivery:
             try:
                 job = self.store.claim(self.owner)
                 if job is None:
-                    self.wake.wait(5)
+                    self.wake.wait(60)
                     self.wake.clear()
                     continue
                 update_id = job['update_id']
