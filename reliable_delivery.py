@@ -42,7 +42,16 @@ class InboxStore:
         try:
             return [row.asdict() for row in self.remote.execute(sql, params).rows]
         except Exception:
+            stale = self.remote
             self.remote = None
+            # Sync libsql clients own an event-loop thread and HTTP session.
+            # Retire both before reconnecting, instead of leaking them after
+            # every transient upstream disconnect. The call remains bounded by
+            # execute() and the stalled-database watchdog.
+            try:
+                stale.close()
+            except Exception:
+                pass
             raise
 
     def execute(self, sql, params=()):

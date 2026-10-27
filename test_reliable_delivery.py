@@ -213,6 +213,7 @@ class DeliveryTests(unittest.TestCase):
                 store.schema()
             self.assertFalse(os.path.exists(ephemeral))
             self.assertIsNone(store.remote)
+            remote.close.assert_called_once()
         finally:
             store.executor.shutdown()
 
