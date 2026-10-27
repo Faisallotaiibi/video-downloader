@@ -4,6 +4,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import tempfile
@@ -24,6 +25,7 @@ from flask import Flask, Response, jsonify, render_template_string, request, sen
 from media_support import (AudioButtons, download_audio, photo_post_url, send_album,
                            tiktok_album, run_configured_media_check)
 from signatures import SignatureService, SignatureStorage
+from reliable_delivery import InboxStore, WebhookDelivery
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,6 +36,10 @@ if not BOT_TOKEN:
 
 PORT = int(os.environ.get("PORT", 10000))
 SELF_URL = os.environ.get("SELF_URL", "https://video-downloader-0ea4.onrender.com")
+ON_RENDER = bool(os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('RENDER') == 'true')
+BOT_TRANSPORT = os.environ.get('BOT_TRANSPORT', 'webhook' if ON_RENDER else 'polling')
+if BOT_TRANSPORT not in ('webhook', 'polling'):
+    raise RuntimeError('BOT_TRANSPORT must be webhook or polling')
 MAX_TELEGRAM_FILE_SIZE = 50 * 1024 * 1024  # Telegram bot API upload limit
 
 DASHBOARD_USERNAME = os.environ.get("DASHBOARD_USERNAME", "admin")
@@ -513,9 +519,31 @@ def friendly_error_message(url, error_text):
     return GENERIC_ERROR_MESSAGE
 
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=BOT_TRANSPORT != 'webhook')
+# Bound every Telegram call, including acknowledgements and signature menus.
+telebot.apihelper.CONNECT_TIMEOUT = 10
+telebot.apihelper.READ_TIMEOUT = 30
 audio_buttons = AudioButtons()
 app = Flask(__name__, static_folder=".")
+
+
+def inbox_remote_factory():
+    import libsql_client
+    return libsql_client.create_client_sync(
+        url=TURSO_DATABASE_URL.replace('libsql://', 'https://', 1),
+        auth_token=TURSO_AUTH_TOKEN,
+    )
+
+
+delivery = None
+if BOT_TRANSPORT == 'webhook':
+    inbox = InboxStore(
+        os.path.join(os.path.dirname(DB_PATH), 'telegram-inbox.db'),
+        remote_factory=inbox_remote_factory if TURSO_DATABASE_URL and TURSO_AUTH_TOKEN else None,
+        require_remote=ON_RENDER,
+    )
+    delivery = WebhookDelivery(bot, inbox, BOT_TOKEN, os.environ.get('RENDER_EXTERNAL_URL') or SELF_URL)
+    delivery.register(app)
 
 
 USAGE_LOG_EXTRA_COLUMNS = {
@@ -2403,12 +2431,38 @@ def run_server():
     app.run(host="0.0.0.0", port=PORT)
 
 
+def stop_service(signum, frame):
+    logger.info('Stopping Telegram delivery for service shutdown')
+    if delivery:
+        delivery.stop(timeout=20)
+    else:
+        bot.stop_polling()
+    # A stopped handler or DB thread must not hold Render's retiring instance.
+    os._exit(0)
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, stop_service)
+    signal.signal(signal.SIGINT, stop_service)
     init_db()
-    threading.Thread(target=keep_alive, daemon=True).start()
     threading.Thread(target=run_server, daemon=True).start()
     threading.Thread(target=run_configured_media_check, args=(FFMPEG_PATH,), daemon=True).start()
     threading.Thread(target=signature_service.activate, daemon=True).start()
-    logger.info("Starting Telegram bot polling")
-    run_bot_polling()
+    if delivery:
+        logger.info('Starting durable Telegram webhook delivery')
+        while True:
+            try:
+                delivery.start()
+                break
+            except Exception as error:
+                logger.warning('Telegram inbox initialization retry: %s', type(error).__name__)
+                time.sleep(5)
+        threading.Event().wait()
+    else:
+        threading.Thread(target=keep_alive, daemon=True).start()
+        # Explicitly switching transport keeps all pending Telegram messages.
+        bot.delete_webhook(drop_pending_updates=False, timeout=15)
+        logger.info("Starting Telegram bot polling")
+        run_bot_polling()
+
 
