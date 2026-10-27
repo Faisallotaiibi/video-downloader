@@ -62,6 +62,17 @@ class DeliveryTests(unittest.TestCase):
     def rows(self):
         return self.store.execute('SELECT * FROM telegram_inbox ORDER BY update_id')
 
+    def test_health_requires_workers_and_accessible_inbox(self):
+        self.assertEqual(self.client.get('/healthz').status_code, 503)
+        self.delivery.start()
+        self.assertEqual(self.client.get('/healthz').status_code, 200)
+        with patch.object(self.store, 'execute', side_effect=TimeoutError):
+            self.assertEqual(self.client.get('/healthz').status_code, 503)
+        self.assertEqual(self.client.get('/healthz').status_code, 200)
+        self.delivery.active[99] = time.monotonic() - 721
+        self.assertEqual(self.client.get('/healthz').status_code, 503)
+        self.delivery.active.clear()
+
     def test_only_authenticated_telegram_requests_are_accepted(self):
         self.assertEqual(self.post(secret='bad').status_code, 403)
         self.assertEqual(self.client.post(WEBHOOK_PATH, json=update()).status_code, 403)

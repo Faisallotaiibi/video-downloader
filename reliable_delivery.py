@@ -232,7 +232,14 @@ class WebhookDelivery:
         return jsonify(ok=True)
 
     def health(self):
-        healthy = self.ready and not self.stopping.is_set() and all(w.is_alive() for w in self.workers)
+        healthy = (self.ready and not self.stopping.is_set()
+                   and len(self.workers) == 2 and all(w.is_alive() for w in self.workers)
+                   and not self.overdue())
+        if healthy:
+            try:
+                self.store.execute('SELECT update_id FROM telegram_inbox LIMIT 1')
+            except Exception:
+                healthy = False
         return jsonify(ok=healthy, transport='webhook', persistent_inbox=bool(self.store.remote_factory), public_delivery_verified=self.public_verified), 200 if healthy else 503
 
     def start(self):

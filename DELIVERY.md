@@ -71,3 +71,14 @@ conflict; remove it without dropping updates before using such a version.
 Official references:
 - https://render.com/docs/free
 - https://core.telegram.org/bots/api#setwebhook
+
+## Availability checks
+
+The inbox uses stateless Turso HTTP pipeline requests with bounded timeouts.
+GitHub Actions schedules an external readiness request every five minutes;
+scheduled runs can be delayed and are not an uptime guarantee. The health
+endpoint checks both workers, overdue work, and an actual inbox database read.
+It returns 503 when those checks fail, without restarting or changing jobs.
+The startup public probe is a separate receipt/storage/dispatch check. During
+rolling deployments its public request can be served by the outgoing instance;
+it is not proof of a real user receiving a video on the new instance.
