@@ -193,7 +193,7 @@ class WebhookDelivery:
             try:
                 before = self.bot.get_webhook_info(timeout=15)
                 self._audit(before, 'before-registration')
-                identity = self.bot.get_me(timeout=15)
+                identity = self.bot.get_me()
                 logger.info('Telegram bot identity username=%s expected_webhook_host=%s',
                             identity.username, urlparse(self.url).netloc)
                 if not self.bot.set_webhook(url=self.url, secret_token=self.secret,
