@@ -2454,6 +2454,7 @@ if __name__ == "__main__":
             except Exception as error:
                 logger.warning('Telegram inbox initialization retry: %s', type(error).__name__)
                 time.sleep(5)
+        threading.Thread(target=delivery.check_public_delivery, daemon=True).start()
         threading.Event().wait()
     else:
         threading.Thread(target=keep_alive, daemon=True).start()

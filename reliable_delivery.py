@@ -189,6 +189,7 @@ class WebhookDelivery:
         self.secret = webhook_secret(token)
         self.owner = uuid.uuid4().hex
         self.ready = False
+        self.public_verified = False
         self.stopping = threading.Event()
         self.wake = threading.Event()
         self.workers = []
@@ -232,7 +233,7 @@ class WebhookDelivery:
 
     def health(self):
         healthy = self.ready and not self.stopping.is_set() and all(w.is_alive() for w in self.workers)
-        return jsonify(ok=healthy, transport='webhook', persistent_inbox=bool(self.store.remote_factory)), 200 if healthy else 503
+        return jsonify(ok=healthy, transport='webhook', persistent_inbox=bool(self.store.remote_factory), public_delivery_verified=self.public_verified), 200 if healthy else 503
 
     def start(self):
         if self.monitor is None:
@@ -280,6 +281,34 @@ class WebhookDelivery:
         logger.info('Telegram delivery audit stage=%s host=%s path_matches=%s pending=%s last_error_date=%s last_error=%s',
                     stage, urlparse(info.url).netloc, info.url == self.url,
                     info.pending_update_count, getattr(info, 'last_error_date', None), error[:300])
+
+
+    def check_public_delivery(self):
+        """A harmless no-message update verifies the real public receipt path."""
+        update_id = -int(time.time() * 1000000)
+        for attempt in range(4):
+            if self.stopping.is_set():
+                return
+            try:
+                response = requests.post(self.url, json={'update_id': update_id},
+                    headers={'X-Telegram-Bot-Api-Secret-Token': self.secret}, timeout=(5, 20))
+                try:
+                    response.raise_for_status()
+                finally:
+                    response.close()
+                deadline = time.monotonic() + 20
+                while time.monotonic() < deadline and not self.stopping.is_set():
+                    rows = self.store.execute('SELECT state FROM telegram_inbox WHERE update_id=?', (update_id,))
+                    if rows and rows[0]['state'] == 'done':
+                        self.public_verified = True
+                        logger.info('PUBLIC_DELIVERY_CHECK SUCCESS authenticated HTTP receipt + persistent inbox + worker completion')
+                        return
+                    self.stopping.wait(.1)
+                raise TimeoutError('Public inbox dispatch did not complete')
+            except Exception as error:
+                logger.warning('Public delivery check retry attempt=%s type=%s', attempt + 1, type(error).__name__)
+                self.stopping.wait(3)
+        logger.error('PUBLIC_DELIVERY_CHECK FAILED; service readiness alone is insufficient')
 
     def _worker(self):
         while not self.stopping.is_set():
