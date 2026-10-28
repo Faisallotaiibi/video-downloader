@@ -12,3 +12,5 @@ libsql-client
 # silently drops to zero available impersonation targets instead of
 # erroring, so pin instead of leaving this to chance on every build.
 curl_cffi>=0.10,<0.16
+
+waitress==3.0.2

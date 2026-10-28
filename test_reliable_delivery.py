@@ -46,6 +46,7 @@ class DeliveryTests(unittest.TestCase):
         self.bot.get_webhook_info = Mock(return_value=SimpleNamespace(
             url='https://example.test' + WEBHOOK_PATH, pending_update_count=2))
         self.delivery = WebhookDelivery(self.bot, self.store, TOKEN, 'https://example.test')
+        self.delivery.heartbeat.start = Mock()
         self.app = Flask(__name__)
         self.delivery.register(self.app)
         self.client = self.app.test_client()
@@ -67,7 +68,12 @@ class DeliveryTests(unittest.TestCase):
         self.delivery.start()
         self.assertEqual(self.client.get('/healthz').status_code, 200)
         with patch.object(self.store, 'execute', side_effect=TimeoutError):
-            self.assertEqual(self.client.get('/healthz').status_code, 503)
+            # HTTP health does not compete for the inbox lock. The heartbeat
+            # detects sustained dependency failure out of band.
+            self.assertEqual(self.client.get('/healthz').status_code, 200)
+        self.delivery.heartbeat.last_success = time.monotonic() - 661
+        self.assertEqual(self.client.get('/healthz').status_code, 503)
+        self.delivery.heartbeat.last_success = time.monotonic()
         self.assertEqual(self.client.get('/healthz').status_code, 200)
         self.delivery.active[99] = time.monotonic() - 721
         self.assertEqual(self.client.get('/healthz').status_code, 503)
@@ -203,13 +209,13 @@ class DeliveryTests(unittest.TestCase):
         self.delivery.terminate = terminate
         self.delivery.active[1] = time.monotonic() - 721
         with patch.object(self.delivery.stopping, 'wait', return_value=False):
-            self.delivery._monitor()
+            self.delivery.heartbeat.supervise()
         terminate.assert_called_once_with(1)
         self.delivery.active.clear()
         terminate.reset_mock()
         self.store.busy_since = time.monotonic() - 61
         with patch.object(self.delivery.stopping, 'wait', return_value=False):
-            self.delivery._monitor()
+            self.delivery.heartbeat.supervise()
         terminate.assert_called_once_with(1)
 
     def test_render_requires_persistent_storage(self):
@@ -296,17 +302,20 @@ class DeliveryTests(unittest.TestCase):
                 TursoHTTP('https://example.turso.io', 'test').execute('INSERT INTO t VALUES (?)', (1,))
             self.assertEqual(post.call_count, 1)
 
-    def test_public_check_exercises_authenticated_route_store_and_worker(self):
+    def test_local_check_exercises_authenticated_route_store_and_worker(self):
         self.delivery.start()
         def post(url, json, headers, timeout):
+            self.assertTrue(url.startswith('http://127.0.0.1:'))
             received = self.client.post(WEBHOOK_PATH, json=json, headers=headers)
             response = Mock()
             if received.status_code != 200:
                 response.raise_for_status.side_effect = RuntimeError('public route failed')
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
             return response
         with patch('reliable_delivery.requests.post', side_effect=post):
-            self.delivery.check_public_delivery()
-        self.assertTrue(self.delivery.public_verified)
+            self.delivery.check_local_delivery()
+        self.assertTrue(self.delivery.local_verified)
         self.assertTrue(self.rows())
         self.assertTrue(all(row['state'] == 'done' for row in self.rows()))
 

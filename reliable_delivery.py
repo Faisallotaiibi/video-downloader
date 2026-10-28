@@ -4,6 +4,7 @@ Telegram retries non-2xx responses. Only acknowledge after the update is stored;
 never silently fall back from a persistent inbox to ephemeral Render storage.
 """
 from concurrent.futures import ThreadPoolExecutor
+from bot_heartbeat import BotHeartbeat
 import hashlib
 import hmac
 import json
@@ -185,19 +186,20 @@ class WebhookDelivery:
         if bot.threaded:
             raise ValueError('Durable delivery requires synchronous handler dispatch')
         self.bot, self.store = bot, store
-        self.url = public_url.rstrip('/') + WEBHOOK_PATH
+        self.public_url = public_url.rstrip('/')
+        self.url = self.public_url + WEBHOOK_PATH
         self.secret = webhook_secret(token)
         self.owner = uuid.uuid4().hex
         self.ready = False
-        self.public_verified = False
+        self.configured = False
+        self.local_verified = False
         self.stopping = threading.Event()
         self.wake = threading.Event()
         self.workers = []
         self.active = {}
         self.lock = threading.Lock()
-        self.last_maintenance = 0
-        self.monitor = None
         self.terminate = terminate or os._exit
+        self.heartbeat = BotHeartbeat(self)
 
     def register(self, app):
         app.add_url_rule(WEBHOOK_PATH, 'telegram_webhook', self.receive, methods=['POST'])
@@ -232,20 +234,20 @@ class WebhookDelivery:
         return jsonify(ok=True)
 
     def health(self):
-        healthy = (self.ready and not self.stopping.is_set()
+        # Fast, side-effect-free health response. Bounded dependency checks run
+        # in the heartbeat, rather than competing with webhook writes here.
+        healthy = (self.ready and self.configured and not self.stopping.is_set()
                    and len(self.workers) == 2 and all(w.is_alive() for w in self.workers)
-                   and not self.overdue())
-        if healthy:
-            try:
-                self.store.execute('SELECT update_id FROM telegram_inbox LIMIT 1')
-            except Exception:
-                healthy = False
-        return jsonify(ok=healthy, transport='webhook', persistent_inbox=bool(self.store.remote_factory), public_delivery_verified=self.public_verified), 200 if healthy else 503
+                   and self.heartbeat.failure_reason() is None)
+        return jsonify(ok=healthy, transport='webhook',
+                       persistent_inbox=bool(self.store.remote_factory),
+                       local_delivery_verified=self.local_verified,
+                       heartbeat=self.heartbeat.status(),
+                       instance=self.owner[:12],
+                       revision=os.environ.get('RENDER_GIT_COMMIT', '')[:12]), 200 if healthy else 503
 
     def start(self):
-        if self.monitor is None:
-            self.monitor = threading.Thread(target=self._monitor, name='telegram-monitor', daemon=True)
-            self.monitor.start()
+        self.heartbeat.start()
         self.store.schema()
         self.store.prune()
         for index in range(2):
@@ -256,6 +258,7 @@ class WebhookDelivery:
         # immediately, and an existing webhook also survives a sleeping instance.
         self.ready = True
         self._configure()
+        self.configured = True
 
     def _configure(self):
         delay = 1
@@ -290,32 +293,25 @@ class WebhookDelivery:
                     info.pending_update_count, getattr(info, 'last_error_date', None), error[:300])
 
 
-    def check_public_delivery(self):
-        """A harmless no-message update verifies the real public receipt path."""
+    def check_local_delivery(self):
+        """Exercise authenticated HTTP receipt, durable storage and dispatch.
+
+        The synthetic update has no message and cannot send anything to a user.
+        It targets this instance, including while public traffic uses the old one.
+        """
         update_id = -int(time.time() * 1000000)
-        for attempt in range(4):
-            if self.stopping.is_set():
+        url = 'http://127.0.0.1:' + str(int(os.environ.get('PORT', '10000'))) + WEBHOOK_PATH
+        with requests.post(url, json={'update_id': update_id},
+                headers={'X-Telegram-Bot-Api-Secret-Token': self.secret}, timeout=(3, 10)) as response:
+            response.raise_for_status()
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline and not self.stopping.is_set():
+            rows = self.store.execute('SELECT state FROM telegram_inbox WHERE update_id=?', (update_id,))
+            if rows and rows[0]['state'] == 'done':
+                self.local_verified = True
                 return
-            try:
-                response = requests.post(self.url, json={'update_id': update_id},
-                    headers={'X-Telegram-Bot-Api-Secret-Token': self.secret}, timeout=(5, 20))
-                try:
-                    response.raise_for_status()
-                finally:
-                    response.close()
-                deadline = time.monotonic() + 20
-                while time.monotonic() < deadline and not self.stopping.is_set():
-                    rows = self.store.execute('SELECT state FROM telegram_inbox WHERE update_id=?', (update_id,))
-                    if rows and rows[0]['state'] == 'done':
-                        self.public_verified = True
-                        logger.info('PUBLIC_DELIVERY_CHECK SUCCESS authenticated HTTP receipt + persistent inbox + worker completion')
-                        return
-                    self.stopping.wait(.1)
-                raise TimeoutError('Public inbox dispatch did not complete')
-            except Exception as error:
-                logger.warning('Public delivery check retry attempt=%s type=%s', attempt + 1, type(error).__name__)
-                self.stopping.wait(3)
-        logger.error('PUBLIC_DELIVERY_CHECK FAILED; service readiness alone is insufficient')
+            self.stopping.wait(1)
+        raise TimeoutError('Local inbox dispatch did not complete')
 
     def _worker(self):
         while not self.stopping.is_set():
@@ -356,20 +352,6 @@ class WebhookDelivery:
     def overdue(self):
         with self.lock:
             return any(time.monotonic() - started > 720 for started in self.active.values())
-
-    def _monitor(self):
-        while not self.stopping.wait(15):
-            db_stalled = self.store.busy_since is not None and time.monotonic() - self.store.busy_since > 60
-            if db_stalled or self.overdue() or any(not worker.is_alive() for worker in self.workers):
-                logger.critical('Telegram worker stalled; exiting for automatic host recovery')
-                self.terminate(1)
-                return
-            if time.monotonic() - self.last_maintenance >= 3600:
-                try:
-                    self.store.prune()
-                    self.last_maintenance = time.monotonic()
-                except Exception as error:
-                    logger.warning('Inbox maintenance retry: %s', type(error).__name__)
 
     def stop(self, timeout=20):
         self.ready = False

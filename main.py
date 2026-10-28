@@ -21,6 +21,7 @@ import requests
 import telebot
 import yt_dlp
 from flask import Flask, Response, jsonify, render_template_string, request, send_from_directory
+from waitress import serve
 
 from media_support import (AudioButtons, download_audio, photo_post_url, send_album,
                            tiktok_album, run_configured_media_check)
@@ -745,15 +746,6 @@ def run_bot_polling():
         logger.warning("Retrying Telegram polling in %s seconds", delay)
         time.sleep(delay)
         delay = min(delay * 2, 60)
-
-
-def keep_alive():
-    while True:
-        try:
-            requests.get(SELF_URL, timeout=10)
-        except requests.RequestException:
-            logger.warning("keep_alive ping failed", exc_info=True)
-        time.sleep(840)
 
 
 def fetch_video_for_signature(url, folder):
@@ -2425,7 +2417,8 @@ def dashboard():
 
 
 def run_server():
-    app.run(host="0.0.0.0", port=PORT)
+    serve(app, host="0.0.0.0", port=PORT, threads=8,
+          channel_timeout=60, max_request_body_size=1024 * 1024)
 
 
 def stop_service(signum, frame):
@@ -2454,10 +2447,8 @@ if __name__ == "__main__":
             except Exception as error:
                 logger.warning('Telegram inbox initialization retry: %s', type(error).__name__)
                 time.sleep(5)
-        threading.Thread(target=delivery.check_public_delivery, daemon=True).start()
         threading.Event().wait()
     else:
-        threading.Thread(target=keep_alive, daemon=True).start()
         # Explicitly switching transport keeps all pending Telegram messages.
         bot.delete_webhook(drop_pending_updates=False, timeout=15)
         logger.info("Starting Telegram bot polling")

@@ -32,16 +32,30 @@ Pending work and expired leases are recovered from the same database after a
 restart. Inbox capacity is bounded to 200 pending/running updates; overload
 returns 503 rather than accepting work that cannot be retained.
 
-A handler exception does not stop reception. A hanging job is detected after
-12 minutes, and a database call stuck for over a minute triggers process exit
-for host recovery. A crashed running job becomes available when its 15-minute
-lease expires. Download and Telegram network timeouts remain bounded. These
-mechanisms add no paid service or dependency.
+## Five-minute heartbeat and recovery
 
-`GET /healthz` reports delivery readiness and persistent storage mode without
-exposing user data or credentials. Startup logs include `Telegram webhook
-verified persistent_inbox=True`. Processing logs record only update IDs and
-outcomes for the inbox.
+`bot_heartbeat.py` replaces the old one-shot public probe, maintenance watchdog,
+and polling self-ping. It runs every 300 seconds on a monotonic clock without
+starting overlapping checks. Each cycle checks Telegram's registered webhook,
+repairs a missing or changed registration or a new delivery error without
+clearing pending updates, then submits a no-message update through this
+instance's localhost HTTP endpoint and verifies durable worker completion.
+It prunes completed records and atomically rewrites
+`/tmp/the966bot-heartbeat.json` with the timestamp, cycle count and outcome.
+This runtime file is ephemeral, contains no credentials, and is recreated on
+startup. The code itself is versioned in `bot_heartbeat.py`.
+
+An independent supervisor checks every 15 seconds. A database call stuck for
+60 seconds, a dead worker, a handler stuck for 12 minutes, a heartbeat cycle
+stuck for 150 seconds, or no successful cycle for 660 seconds exits the process
+for hosting recovery. An isolated failed check is retried at the next cycle;
+it does not interrupt active downloads. Existing durable leases survive
+restarts, and payloads remain in Turso until processing completes.
+
+`GET /healthz` returns cached heartbeat age, failures, worker readiness, instance
+identity and deployed revision without network calls or user data. Configure
+Render's Health Check Path to `/healthz` so host supervision observes delivery
+readiness instead of only an open TCP socket. HTTP serving uses Waitress.
 
 ## Limits
 
@@ -55,7 +69,7 @@ delay or prevent downloads.
 
 ## Validation and rollback
 
-Run `python -m unittest -v test_reliable_delivery test_media_support test_signatures`.
+Run `python -m unittest -v test_bot_heartbeat test_reliable_delivery test_media_support test_signatures`.
 The delivery tests cover authenticated receipt, commit-before-ack, duplicate
 delivery, database failure, capacity, restart recovery, atomic claiming,
 independent workers, handler exceptions, completion write retries, watchdog
@@ -72,13 +86,29 @@ Official references:
 - https://render.com/docs/free
 - https://core.telegram.org/bots/api#setwebhook
 
-## Availability checks
+## Hosting limitation and observed incident
 
-The inbox uses stateless Turso HTTP pipeline requests with bounded timeouts.
-GitHub Actions schedules an external readiness request every five minutes;
-scheduled runs can be delayed and are not an uptime guarantee. The health
-endpoint checks both workers, overdue work, and an actual inbox database read.
-It returns 503 when those checks fail, without restarting or changing jobs.
-The startup public probe is a separate receipt/storage/dispatch check. During
-rolling deployments its public request can be served by the outgoing instance;
-it is not proof of a real user receiving a video on the new instance.
+On 2026-10-28 the service was confirmed on Render's Free compute plan with an
+empty HTTP health-check setting. Logs showed successful startup around 06:22
+UTC followed by graceful shutdown at 06:37 UTC, and another startup around
+13:20 UTC followed by shutdown at 13:35 UTC. These intervals match the free
+plan's documented idle spin-down. External availability probes appeared hours
+apart despite the five-minute GitHub Actions schedule.
+
+By default each successful internal cycle also makes a best-effort public
+health request (`BOT_PUBLIC_HEARTBEAT=true`). This can reduce idle spin-down,
+but a process that has already stopped cannot ping or repair itself. The
+existing GitHub Actions external schedule remains a secondary wake-up check,
+not an exact timer: GitHub can delay or drop scheduled jobs and disables them
+in inactive public repositories. Neither mechanism guarantees always-on service.
+
+To remove idle suspension at its source, this Render service needs an always-on
+paid compute plan, or migration to another always-on host. No paid plan is
+activated by these files. On an always-on instance the public self-request can
+be disabled with `BOT_PUBLIC_HEARTBEAT=false`; internal checks and recovery stay
+active. Hosting outages, quotas and failures outside the process remain possible.
+
+References:
+- https://render.com/docs/free
+- https://render.com/docs/health-checks
+- https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
