@@ -81,6 +81,16 @@ class HeartbeatTests(unittest.TestCase):
             self.heartbeat.supervise()
         self.delivery.terminate.assert_called_once_with(1)
 
+    def test_failed_local_probe_still_checks_public_reachability(self):
+        self.delivery.check_local_delivery.side_effect = TimeoutError()
+        with patch.dict(os.environ, {'BOT_PUBLIC_HEARTBEAT': 'true'}), \
+                patch('bot_heartbeat.requests.get') as get:
+            self.heartbeat.check_once()
+        get.assert_called_once_with(self.delivery.public_url + '/healthz?probe=heartbeat',
+                                    timeout=(5, 15))
+        self.assertEqual(self.heartbeat.failures, 1)
+        self.assertIsNone(self.heartbeat.last_success)
+
     def test_repeated_timer_runs_and_shutdown_stops_future_checks(self):
         self.heartbeat.interval = .04
         self.heartbeat.start()

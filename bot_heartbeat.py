@@ -84,14 +84,6 @@ class BotHeartbeat:
             # the retiring instance during a rolling deploy.
             d.check_local_delivery()
             d.store.prune()
-            # Best-effort public traffic reduces free-tier idle shutdowns. It
-            # is NOT the recovery mechanism and cannot wake a suspended process.
-            if os.environ.get('BOT_PUBLIC_HEARTBEAT', 'true').lower() == 'true':
-                try:
-                    with requests.get(d.public_url + '/healthz?probe=heartbeat', timeout=(5, 15)) as response:
-                        response.raise_for_status()
-                except Exception as error:
-                    logger.warning('HEARTBEAT public path unavailable type=%s', type(error).__name__)
             with self.lock:
                 self.last_success = time.monotonic()
                 self.failures = 0
@@ -105,6 +97,16 @@ class BotHeartbeat:
                 self.last_error = type(error).__name__
             logger.warning('HEARTBEAT FAILED type=%s consecutive=%s', self.last_error, self.failures)
         finally:
+            # Keep public reachability independent of database/probe failure.
+            # Otherwise a transient busy inbox also stops all public traffic,
+            # allowing free hosting to sleep while Telegram is backing off.
+            # This remains best effort, not an always-on hosting guarantee.
+            if os.environ.get('BOT_PUBLIC_HEARTBEAT', 'true').lower() == 'true':
+                try:
+                    with requests.get(d.public_url + '/healthz?probe=heartbeat', timeout=(5, 15)) as response:
+                        response.raise_for_status()
+                except Exception as error:
+                    logger.warning('HEARTBEAT public path unavailable type=%s', type(error).__name__)
             with self.lock:
                 self.cycles += 1
                 self.last_finished = time.monotonic()

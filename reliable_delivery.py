@@ -306,7 +306,14 @@ class WebhookDelivery:
             response.raise_for_status()
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline and not self.stopping.is_set():
-            rows = self.store.execute('SELECT state FROM telegram_inbox WHERE update_id=?', (update_id,))
+            try:
+                rows = self.store.execute('SELECT state FROM telegram_inbox WHERE update_id=?', (update_id,))
+            except (TimeoutError, requests.RequestException):
+                # Workers and receipt share a bounded database slot. A busy
+                # slot is not a failed dispatch: retry this read within the
+                # existing deadline, without reposting the synthetic update.
+                self.stopping.wait(1)
+                continue
             if rows and rows[0]['state'] == 'done':
                 self.local_verified = True
                 return
