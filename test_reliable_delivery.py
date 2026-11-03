@@ -327,6 +327,25 @@ class DeliveryTests(unittest.TestCase):
         self.store.prune()
         self.assertEqual(self.rows(), [])
 
+    def test_probe_retries_busy_database_without_reposting_update(self):
+        with patch('reliable_delivery.requests.post') as post, \
+                patch.object(self.store, 'execute', side_effect=[
+                    TimeoutError('Inbox storage is busy'), [{'state': 'done'}]]) as execute, \
+                patch.object(self.delivery.stopping, 'wait'):
+            self.delivery.check_local_delivery()
+        self.assertTrue(self.delivery.local_verified)
+        self.assertEqual(execute.call_count, 2)
+        post.assert_called_once()
+
+    def test_probe_persistent_database_failure_remains_bounded(self):
+        with patch('reliable_delivery.requests.post'), \
+                patch.object(self.store, 'execute', side_effect=TimeoutError), \
+                patch('reliable_delivery.time.monotonic', side_effect=[0, 0, 46]), \
+                patch.object(self.delivery.stopping, 'wait'):
+            with self.assertRaises(TimeoutError):
+                self.delivery.check_local_delivery()
+        self.assertFalse(self.delivery.local_verified)
+
 
 if __name__ == '__main__':
     unittest.main()
