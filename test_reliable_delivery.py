@@ -71,9 +71,9 @@ class DeliveryTests(unittest.TestCase):
             # HTTP health does not compete for the inbox lock. The heartbeat
             # detects sustained dependency failure out of band.
             self.assertEqual(self.client.get('/healthz').status_code, 200)
-        self.delivery.heartbeat.last_success = time.monotonic() - 661
+        self.delivery.heartbeat.last_finished = time.monotonic() - 661
         self.assertEqual(self.client.get('/healthz').status_code, 503)
-        self.delivery.heartbeat.last_success = time.monotonic()
+        self.delivery.heartbeat.last_finished = time.monotonic()
         self.assertEqual(self.client.get('/healthz').status_code, 200)
         self.delivery.active[99] = time.monotonic() - 721
         self.assertEqual(self.client.get('/healthz').status_code, 503)
