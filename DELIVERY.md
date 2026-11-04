@@ -47,10 +47,16 @@ startup. The code itself is versioned in `bot_heartbeat.py`.
 
 An independent supervisor checks every 15 seconds. A database call stuck for
 60 seconds, a dead worker, a handler stuck for 12 minutes, a heartbeat cycle
-stuck for 150 seconds, or no successful cycle for 660 seconds exits the process
+stuck for 150 seconds, or no completed cycle for 660 seconds exits the process
 for hosting recovery. An isolated failed check is retried at the next cycle;
 it does not interrupt active downloads. Existing durable leases survive
 restarts, and payloads remain in Turso until processing completes.
+
+Transient heartbeat failures retry after 30 seconds. Completed failed checks
+prove that the process is responsive and do not trigger restart loops during
+upstream outages. Dead workers, stalled database calls and hung checks still
+trigger recovery. Public health requests are attempted even if an internal
+check fails; they remain best effort on the Free compute plan.
 
 `GET /healthz` returns cached heartbeat age, failures, worker readiness, instance
 identity and deployed revision without network calls or user data. Configure
@@ -112,3 +118,4 @@ References:
 - https://render.com/docs/free
 - https://render.com/docs/health-checks
 - https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
+

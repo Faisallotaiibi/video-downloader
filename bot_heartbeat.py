@@ -54,7 +54,9 @@ class BotHeartbeat:
 
     def healthy(self):
         with self.lock:
-            reference = self.last_success if self.last_success is not None else self.started
+            # A completed failed check proves the process is alive. Restarting
+            # cannot repair an upstream outage or temporary database contention.
+            reference = self.last_finished if self.last_finished is not None else self.started
             return time.monotonic() - reference < STALE_AFTER
 
     def refresh_webhook(self):
@@ -84,14 +86,6 @@ class BotHeartbeat:
             # the retiring instance during a rolling deploy.
             d.check_local_delivery()
             d.store.prune()
-            # Best-effort public traffic reduces free-tier idle shutdowns. It
-            # is NOT the recovery mechanism and cannot wake a suspended process.
-            if os.environ.get('BOT_PUBLIC_HEARTBEAT', 'true').lower() == 'true':
-                try:
-                    with requests.get(d.public_url + '/healthz?probe=heartbeat', timeout=(5, 15)) as response:
-                        response.raise_for_status()
-                except Exception as error:
-                    logger.warning('HEARTBEAT public path unavailable type=%s', type(error).__name__)
             with self.lock:
                 self.last_success = time.monotonic()
                 self.failures = 0
@@ -110,6 +104,14 @@ class BotHeartbeat:
                 self.last_finished = time.monotonic()
             self.cycle_started = None
             self.write_state()
+            # Try the public path even when a Telegram/database check failed.
+            # This remains best effort; a sleeping process cannot wake itself.
+            if os.environ.get('BOT_PUBLIC_HEARTBEAT', 'true').lower() == 'true':
+                try:
+                    with requests.get(d.public_url + '/healthz?probe=heartbeat', timeout=(5, 15)) as response:
+                        response.raise_for_status()
+                except Exception as error:
+                    logger.warning('HEARTBEAT public path unavailable type=%s', type(error).__name__)
 
     def write_state(self):
         state = self.status()
@@ -132,10 +134,12 @@ class BotHeartbeat:
         next_check = time.monotonic()
         while not stop.is_set():
             self.check_once()
-            next_check += self.interval
+            # Retry transient failures promptly without overlapping checks.
+            delay = min(30, self.interval) if self.failures else self.interval
+            next_check += delay
             # Never accumulate overlapping probes after an outage.
             if next_check < time.monotonic():
-                next_check = time.monotonic() + self.interval
+                next_check = time.monotonic() + delay
             stop.wait(max(0, next_check - time.monotonic()))
 
     def failure_reason(self):
@@ -162,3 +166,4 @@ class BotHeartbeat:
                 logger.critical('HEARTBEAT RECOVERY reason=%s; exiting for host restart', reason)
                 self.delivery.terminate(1)
                 return
+

@@ -75,11 +75,33 @@ class HeartbeatTests(unittest.TestCase):
         self.heartbeat.cycle_started = time.monotonic() - 151
         self.assertEqual(self.heartbeat.failure_reason(), 'heartbeat_stalled')
         self.heartbeat.cycle_started = None
-        self.heartbeat.last_success = time.monotonic() - 661
+        self.heartbeat.last_finished = time.monotonic() - 661
         self.assertEqual(self.heartbeat.failure_reason(), 'delivery_checks_stale')
         with patch.object(self.delivery.stopping, 'wait', return_value=False):
             self.heartbeat.supervise()
         self.delivery.terminate.assert_called_once_with(1)
+
+    def test_upstream_failures_do_not_restart_a_responsive_process(self):
+        self.heartbeat.last_success = time.monotonic() - 900
+        self.delivery.check_local_delivery.side_effect = TimeoutError('temporary contention')
+        self.heartbeat.check_once()
+        self.heartbeat.check_once()
+        self.assertEqual(self.heartbeat.failures, 2)
+        self.assertIsNone(self.heartbeat.failure_reason())
+        self.delivery.terminate.assert_not_called()
+
+    def test_public_probe_still_runs_after_database_failure(self):
+        self.delivery.check_local_delivery.side_effect = TimeoutError()
+        with patch.dict(os.environ, {'BOT_PUBLIC_HEARTBEAT': 'true'}), patch('bot_heartbeat.requests.get') as get:
+            self.heartbeat.check_once()
+        get.assert_called_once_with('https://example.test/healthz?probe=heartbeat', timeout=(5, 15))
+        self.assertEqual(self.heartbeat.failures, 1)
+
+    def test_failed_public_probe_does_not_erase_delivery_success(self):
+        with patch.dict(os.environ, {'BOT_PUBLIC_HEARTBEAT': 'true'}), patch('bot_heartbeat.requests.get', side_effect=TimeoutError()):
+            self.heartbeat.check_once()
+        self.assertIsNotNone(self.heartbeat.last_success)
+        self.assertEqual(self.heartbeat.failures, 0)
 
     def test_repeated_timer_runs_and_shutdown_stops_future_checks(self):
         self.heartbeat.interval = .04
@@ -112,3 +134,4 @@ class HeartbeatTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
